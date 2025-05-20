@@ -86,7 +86,12 @@ contract CultureBridgeIdentity is Ownable {
     /**
      * @dev 获取用户身份信息
      * @param user 用户钱包地址
-     * @return 用户身份信息
+     * @return id 用户ID
+     * @return username 用户名
+     * @return reputationScore 声誉分数
+     * @return contributionCount 贡献计数
+     * @return createdAt 创建时间
+     * @return updatedAt 更新时间
      */
     function getIdentity(address user) external view returns (
         uint256 id,
