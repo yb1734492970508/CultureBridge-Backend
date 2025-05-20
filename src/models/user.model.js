@@ -42,6 +42,38 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['user', 'admin'],
     default: 'user'
+  },
+  // 区块链相关字段
+  walletAddress: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true
+  },
+  blockchainIdentityId: {
+    type: Number,
+    default: null
+  },
+  tokenBalance: {
+    type: String,
+    default: '0'
+  },
+  reputationScore: {
+    type: Number,
+    default: 0
+  },
+  contributionCount: {
+    type: Number,
+    default: 0
+  },
+  lastRewardAt: {
+    type: Date
+  },
+  lastRewardReason: {
+    type: String
+  },
+  blockchainSyncedAt: {
+    type: Date
   }
 }, {
   timestamps: true
