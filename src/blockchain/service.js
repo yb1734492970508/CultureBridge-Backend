@@ -1,5 +1,6 @@
-// src/blockchain/service.js
+// src/blockchain/service.js 更新版
 const BlockchainAdapter = require('./adapter');
+const CultureBridgeIdentityABI = require('../contracts/abis/CultureBridgeIdentity.json');
 
 /**
  * 区块链服务
@@ -9,6 +10,7 @@ class BlockchainService {
   constructor() {
     this.adapter = new BlockchainAdapter();
     this.initialized = false;
+    this.contracts = {};
   }
 
   /**
@@ -21,8 +23,38 @@ class BlockchainService {
     }
 
     const success = await this.adapter.initialize(network);
+    
+    if (success) {
+      // 加载身份合约
+      if (process.env.IDENTITY_CONTRACT_ADDRESS) {
+        this.loadIdentityContract(process.env.IDENTITY_CONTRACT_ADDRESS);
+      }
+    }
+    
     this.initialized = success;
     return success;
+  }
+
+  /**
+   * 加载身份合约
+   * @param {string} address - 合约地址
+   */
+  loadIdentityContract(address) {
+    try {
+      this.contracts.identity = this.adapter.loadContract('identity', address, CultureBridgeIdentityABI);
+      return true;
+    } catch (error) {
+      console.error('加载身份合约失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 获取身份合约实例
+   * @returns {object} 合约实例
+   */
+  getIdentityContract() {
+    return this.contracts.identity;
   }
 
   /**
@@ -49,16 +81,6 @@ class BlockchainService {
    */
   async getWalletBalance(address) {
     return await this.adapter.getBalance(address);
-  }
-
-  /**
-   * 加载智能合约
-   * @param {string} name - 合约名称
-   * @param {string} address - 合约地址
-   * @param {object} abi - 合约ABI
-   */
-  loadContract(name, address, abi) {
-    return this.adapter.loadContract(name, address, abi);
   }
 }
 

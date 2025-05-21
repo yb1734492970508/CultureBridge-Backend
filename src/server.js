@@ -6,6 +6,10 @@ const morgan = require('morgan');
 
 // 导入路由
 const authRoutes = require('./routes/auth.routes');
+const blockchainRoutes = require('./routes/blockchain.routes');
+
+// 初始化区块链服务
+const blockchainService = require('./blockchain/service');
 
 // 初始化Express应用
 const app = express();
@@ -17,6 +21,7 @@ app.use(morgan('dev'));
 
 // 路由
 app.use('/api/auth', authRoutes);
+app.use('/api/blockchain', blockchainRoutes);
 
 // 根路由
 app.get('/', (req, res) => {
@@ -37,6 +42,20 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  
+  // 初始化区块链服务
+  const network = process.env.NODE_ENV === 'production' ? 'polygon' : 'mumbai';
+  blockchainService.initialize(network)
+    .then(success => {
+      if (success) {
+        console.log(`区块链服务已初始化，连接到 ${network} 网络`);
+      } else {
+        console.warn('区块链服务初始化失败，部分功能可能不可用');
+      }
+    })
+    .catch(err => {
+      console.error('区块链服务初始化错误:', err);
+    });
 });
 
 // 连接数据库
