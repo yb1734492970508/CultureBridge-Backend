@@ -7,6 +7,7 @@ const morgan = require('morgan');
 // 导入路由
 const authRoutes = require('./routes/auth.routes');
 const blockchainRoutes = require('./routes/blockchain.routes');
+const activityRoutes = require('./routes/activity.routes');
 
 // 初始化区块链服务
 const blockchainService = require('./blockchain/service');
@@ -22,6 +23,7 @@ app.use(morgan('dev'));
 // 路由
 app.use('/api/auth', authRoutes);
 app.use('/api/blockchain', blockchainRoutes);
+app.use('/api/activities', activityRoutes);
 
 // 根路由
 app.get('/', (req, res) => {
