@@ -1,424 +1,761 @@
-// src/blockchain/service.js 更新版 - 添加活动合约支持
-const BlockchainAdapter = require('./adapter');
-const CultureBridgeIdentityABI = require('../contracts/abis/CultureBridgeIdentity.json');
-const CultureBridgeActivityABI = require('../contracts/abis/CultureBridgeActivity.json');
+// src/blockchain/service.js 更新版本 - 添加NFT合约支持
 
-/**
- * 区块链服务
- * 提供业务层面的区块链功能接口
- */
+const { ethers } = require('ethers');
+const CultureBridgeIdentityABI = require('../contracts/abis/CultureBridgeIdentity.json').abi;
+const CultureBridgeActivityABI = require('../contracts/abis/CultureBridgeActivity.json').abi;
+const CultureBridgeNFTABI = require('../contracts/abis/CultureBridgeNFT.json').abi;
+
+// 合约地址配置
+const contractAddresses = {
+  identity: {
+    mumbai: process.env.IDENTITY_CONTRACT_MUMBAI || '0x0000000000000000000000000000000000000000',
+    polygon: process.env.IDENTITY_CONTRACT_POLYGON || '0x0000000000000000000000000000000000000000'
+  },
+  activity: {
+    mumbai: process.env.ACTIVITY_CONTRACT_MUMBAI || '0x0000000000000000000000000000000000000000',
+    polygon: process.env.ACTIVITY_CONTRACT_POLYGON || '0x0000000000000000000000000000000000000000'
+  },
+  nft: {
+    mumbai: process.env.NFT_CONTRACT_MUMBAI || '0x0000000000000000000000000000000000000000',
+    polygon: process.env.NFT_CONTRACT_POLYGON || '0x0000000000000000000000000000000000000000'
+  }
+};
+
+// 网络配置
+const networks = {
+  mumbai: {
+    name: 'Mumbai Testnet',
+    chainId: 80001,
+    rpcUrl: process.env.MUMBAI_RPC_URL || 'https://rpc-mumbai.maticvigil.com'
+  },
+  polygon: {
+    name: 'Polygon Mainnet',
+    chainId: 137,
+    rpcUrl: process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com'
+  }
+};
+
 class BlockchainService {
   constructor() {
-    this.adapter = new BlockchainAdapter();
+    this.provider = null;
+    this.wallet = null;
+    this.identityContract = null;
+    this.activityContract = null;
+    this.nftContract = null;
+    this.network = null;
     this.initialized = false;
-    this.contracts = {};
   }
 
   /**
    * 初始化区块链服务
-   * @param {string} network - 网络名称
+   * @param {string} networkName 网络名称 ('mumbai' 或 'polygon')
+   * @returns {Promise<boolean>} 初始化是否成功
    */
-  async initialize(network = 'hardhat') {
-    if (this.initialized) {
-      return true;
-    }
-
-    const success = await this.adapter.initialize(network);
-    
-    if (success) {
-      // 加载身份合约
-      if (process.env.IDENTITY_CONTRACT_ADDRESS) {
-        this.loadIdentityContract(process.env.IDENTITY_CONTRACT_ADDRESS);
+  async initialize(networkName = 'mumbai') {
+    try {
+      // 验证网络名称
+      if (!networks[networkName]) {
+        throw new Error(`不支持的网络: ${networkName}`);
       }
+
+      this.network = networkName;
+      const network = networks[networkName];
+
+      // 创建提供者
+      this.provider = new ethers.providers.JsonRpcProvider(network.rpcUrl);
+
+      // 创建钱包
+      const privateKey = process.env.BLOCKCHAIN_PRIVATE_KEY;
+      if (!privateKey) {
+        throw new Error('未配置区块链私钥');
+      }
+      this.wallet = new ethers.Wallet(privateKey, this.provider);
+
+      // 初始化身份合约
+      const identityAddress = contractAddresses.identity[networkName];
+      this.identityContract = new ethers.Contract(
+        identityAddress,
+        CultureBridgeIdentityABI,
+        this.wallet
+      );
+
+      // 初始化活动合约
+      const activityAddress = contractAddresses.activity[networkName];
+      this.activityContract = new ethers.Contract(
+        activityAddress,
+        CultureBridgeActivityABI,
+        this.wallet
+      );
+
+      // 初始化NFT合约
+      const nftAddress = contractAddresses.nft[networkName];
+      this.nftContract = new ethers.Contract(
+        nftAddress,
+        CultureBridgeNFTABI,
+        this.wallet
+      );
+
+      this.initialized = true;
+      console.log(`区块链服务初始化成功，连接到 ${network.name}`);
+      return true;
+    } catch (error) {
+      console.error('区块链服务初始化失败:', error);
+      this.initialized = false;
+      return false;
+    }
+  }
+
+  /**
+   * 检查服务是否已初始化
+   * @returns {boolean} 是否已初始化
+   */
+  isInitialized() {
+    return this.initialized;
+  }
+
+  /**
+   * 获取当前网络名称
+   * @returns {string} 网络名称
+   */
+  getNetworkName() {
+    return this.network;
+  }
+
+  /**
+   * 获取当前钱包地址
+   * @returns {string} 钱包地址
+   */
+  getWalletAddress() {
+    return this.wallet ? this.wallet.address : null;
+  }
+
+  /**
+   * 获取合约地址
+   * @param {string} contractType 合约类型 ('identity', 'activity', 'nft')
+   * @returns {string} 合约地址
+   */
+  getContractAddress(contractType) {
+    if (!this.network) return null;
+    return contractAddresses[contractType][this.network];
+  }
+
+  // ===== 身份合约方法 =====
+
+  /**
+   * 创建用户身份
+   * @param {string} userAddress 用户钱包地址
+   * @param {string} username 用户名
+   * @param {string} metadataURI 元数据URI
+   * @returns {Promise<Object>} 交易结果
+   */
+  async createIdentity(userAddress, username, metadataURI) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.identityContract.createIdentity(
+        userAddress,
+        username,
+        metadataURI
+      );
+      const receipt = await tx.wait();
       
-      // 加载活动合约
-      if (process.env.ACTIVITY_CONTRACT_ADDRESS) {
-        this.loadActivityContract(process.env.ACTIVITY_CONTRACT_ADDRESS);
-      }
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('创建身份失败:', error);
+      throw error;
     }
+  }
+
+  /**
+   * 更新用户声誉分数
+   * @param {string} userAddress 用户钱包地址
+   * @param {number} reputationChange 声誉变化值
+   * @returns {Promise<Object>} 交易结果
+   */
+  async updateReputation(userAddress, reputationChange) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    this.initialized = success;
-    return success;
-  }
-
-  /**
-   * 加载身份合约
-   * @param {string} address - 合约地址
-   */
-  loadIdentityContract(address) {
     try {
-      this.contracts.identity = this.adapter.loadContract('identity', address, CultureBridgeIdentityABI);
-      return true;
+      const tx = await this.identityContract.updateReputation(
+        userAddress,
+        reputationChange
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
     } catch (error) {
-      console.error('加载身份合约失败:', error);
-      return false;
-    }
-  }
-  
-  /**
-   * 加载活动合约
-   * @param {string} address - 合约地址
-   */
-  loadActivityContract(address) {
-    try {
-      this.contracts.activity = this.adapter.loadContract('activity', address, CultureBridgeActivityABI);
-      return true;
-    } catch (error) {
-      console.error('加载活动合约失败:', error);
-      return false;
+      console.error('更新声誉失败:', error);
+      throw error;
     }
   }
 
   /**
-   * 获取身份合约实例
-   * @returns {object} 合约实例
+   * 记录用户贡献
+   * @param {string} userAddress 用户钱包地址
+   * @param {string} contributionType 贡献类型
+   * @param {string} metadataURI 元数据URI
+   * @returns {Promise<Object>} 交易结果
    */
-  getIdentityContract() {
-    return this.contracts.identity;
-  }
-  
-  /**
-   * 获取活动合约实例
-   * @returns {object} 合约实例
-   */
-  getActivityContract() {
-    return this.contracts.activity;
-  }
-
-  /**
-   * 为用户生成钱包地址
-   * @returns {object} 包含地址和私钥的钱包对象
-   */
-  generateUserWallet() {
-    return this.adapter.generateWallet();
-  }
-
-  /**
-   * 验证钱包地址
-   * @param {string} address - 钱包地址
-   * @returns {boolean} 地址是否有效
-   */
-  validateWalletAddress(address) {
-    return this.adapter.isValidAddress(address);
+  async recordContribution(userAddress, contributionType, metadataURI) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.identityContract.recordContribution(
+        userAddress,
+        contributionType,
+        metadataURI
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('记录贡献失败:', error);
+      throw error;
+    }
   }
 
   /**
-   * 获取钱包余额
-   * @param {string} address - 钱包地址
-   * @returns {string} 余额（以ETH为单位）
+   * 获取用户身份信息
+   * @param {string} userAddress 用户钱包地址
+   * @returns {Promise<Object>} 用户身份信息
    */
-  async getWalletBalance(address) {
-    return await this.adapter.getBalance(address);
+  async getIdentity(userAddress) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const identity = await this.identityContract.getIdentity(userAddress);
+      
+      return {
+        identityId: identity.identityId.toString(),
+        username: identity.username,
+        metadataURI: identity.metadataURI,
+        reputationScore: identity.reputationScore.toString(),
+        contributionCount: identity.contributionCount.toString(),
+        createdAt: new Date(identity.createdAt.toNumber() * 1000),
+        exists: identity.exists
+      };
+    } catch (error) {
+      console.error('获取身份失败:', error);
+      throw error;
+    }
   }
-  
+
+  // ===== 活动合约方法 =====
+
   /**
    * 创建文化活动
-   * @param {object} activityData - 活动数据
-   * @returns {Promise<object>} 交易结果
+   * @param {string} organizerAddress 组织者钱包地址
+   * @param {string} title 活动标题
+   * @param {string} contentHash 内容哈希
+   * @param {string} metadataURI 元数据URI
+   * @returns {Promise<Object>} 交易结果
    */
-  async createActivity(activityData) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
+  async createActivity(organizerAddress, title, contentHash, metadataURI) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.activityContract.createActivity(
+        organizerAddress,
+        title,
+        contentHash,
+        metadataURI
+      );
+      const receipt = await tx.wait();
+      
+      // 解析事件获取活动ID
+      const event = receipt.events.find(e => e.event === 'ActivityCreated');
+      const activityId = event.args.activityId.toString();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        activityId,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('创建活动失败:', error);
+      throw error;
     }
-    
-    const {
-      name,
-      description,
-      activityType,
-      startTime,
-      endTime,
-      location,
-      capacity,
-      fee,
-      contentHash,
-      culturalTags
-    } = activityData;
-    
-    // 调用合约创建活动
-    const tx = await this.contracts.activity.createActivity(
-      name,
-      description,
-      activityType,
-      startTime,
-      endTime,
-      location,
-      capacity,
-      fee,
-      contentHash,
-      culturalTags
-    );
-    
-    const receipt = await tx.wait();
-    
-    // 解析事件获取活动ID
-    const event = receipt.events.find(e => e.event === 'ActivityCreated');
-    const activityId = event.args.activityId.toNumber();
-    
-    return {
-      activityId,
-      transactionHash: receipt.transactionHash
-    };
   }
-  
+
   /**
-   * 更新文化活动
-   * @param {number} activityId - 活动ID
-   * @param {object} activityData - 活动数据
-   * @returns {Promise<object>} 交易结果
+   * 更新活动状态
+   * @param {string} activityId 活动ID
+   * @param {number} newStatus 新状态
+   * @returns {Promise<Object>} 交易结果
    */
-  async updateActivity(activityId, activityData) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
+  async updateActivityStatus(activityId, newStatus) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.activityContract.updateActivityStatus(
+        activityId,
+        newStatus
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('更新活动状态失败:', error);
+      throw error;
     }
-    
-    const {
-      name,
-      description,
-      activityType,
-      startTime,
-      endTime,
-      location,
-      capacity,
-      fee,
-      contentHash,
-      culturalTags
-    } = activityData;
-    
-    // 调用合约更新活动
-    const tx = await this.contracts.activity.updateActivity(
-      activityId,
-      name,
-      description,
-      activityType,
-      startTime,
-      endTime,
-      location,
-      capacity,
-      fee,
-      contentHash,
-      culturalTags
-    );
-    
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      transactionHash: receipt.transactionHash
-    };
   }
-  
-  /**
-   * 更改活动状态
-   * @param {number} activityId - 活动ID
-   * @param {number} status - 活动状态
-   * @returns {Promise<object>} 交易结果
-   */
-  async changeActivityStatus(activityId, status) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
-    
-    // 调用合约更改活动状态
-    const tx = await this.contracts.activity.changeActivityStatus(activityId, status);
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      status,
-      transactionHash: receipt.transactionHash
-    };
-  }
-  
+
   /**
    * 验证活动
-   * @param {number} activityId - 活动ID
-   * @param {number} status - 验证状态
-   * @param {string} comments - 验证评论
-   * @returns {Promise<object>} 交易结果
+   * @param {string} activityId 活动ID
+   * @param {boolean} isVerified 是否验证通过
+   * @param {string} verifierAddress 验证人钱包地址
+   * @returns {Promise<Object>} 交易结果
    */
-  async verifyActivity(activityId, status, comments) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
+  async verifyActivity(activityId, isVerified, verifierAddress) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.activityContract.verifyActivity(
+        activityId,
+        isVerified,
+        verifierAddress
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('验证活动失败:', error);
+      throw error;
     }
-    
-    // 调用合约验证活动
-    const tx = await this.contracts.activity.verifyActivity(activityId, status, comments);
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      status,
-      transactionHash: receipt.transactionHash
-    };
   }
-  
+
   /**
    * 参与活动
-   * @param {number} activityId - 活动ID
-   * @returns {Promise<object>} 交易结果
+   * @param {string} activityId 活动ID
+   * @param {string} participantAddress 参与者钱包地址
+   * @returns {Promise<Object>} 交易结果
    */
-  async joinActivity(activityId) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
+  async joinActivity(activityId, participantAddress) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.activityContract.joinActivity(
+        activityId,
+        participantAddress
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('参与活动失败:', error);
+      throw error;
     }
-    
-    // 调用合约参与活动
-    const tx = await this.contracts.activity.joinActivity(activityId);
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      transactionHash: receipt.transactionHash
-    };
   }
-  
-  /**
-   * 记录参与者出席
-   * @param {number} activityId - 活动ID
-   * @param {string} participant - 参与者地址
-   * @returns {Promise<object>} 交易结果
-   */
-  async recordAttendance(activityId, participant) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
-    
-    // 调用合约记录出席
-    const tx = await this.contracts.activity.recordAttendance(activityId, participant);
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      participant,
-      transactionHash: receipt.transactionHash
-    };
-  }
-  
-  /**
-   * 提交参与反馈
-   * @param {number} activityId - 活动ID
-   * @param {string} feedback - 反馈内容
-   * @returns {Promise<object>} 交易结果
-   */
-  async submitFeedback(activityId, feedback) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
-    
-    // 调用合约提交反馈
-    const tx = await this.contracts.activity.submitFeedback(activityId, feedback);
-    const receipt = await tx.wait();
-    
-    return {
-      activityId,
-      transactionHash: receipt.transactionHash
-    };
-  }
-  
+
   /**
    * 获取活动信息
-   * @param {number} activityId - 活动ID
-   * @returns {Promise<object>} 活动信息
+   * @param {string} activityId 活动ID
+   * @returns {Promise<Object>} 活动信息
    */
   async getActivity(activityId) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const activity = await this.activityContract.getActivity(activityId);
+      
+      return {
+        activityId: activity.activityId.toString(),
+        organizer: activity.organizer,
+        title: activity.title,
+        contentHash: activity.contentHash,
+        metadataURI: activity.metadataURI,
+        status: activity.status,
+        isVerified: activity.isVerified,
+        verifier: activity.verifier,
+        participantCount: activity.participantCount.toString(),
+        createdAt: new Date(activity.createdAt.toNumber() * 1000),
+        exists: activity.exists
+      };
+    } catch (error) {
+      console.error('获取活动失败:', error);
+      throw error;
     }
-    
-    // 调用合约获取活动信息
-    const activity = await this.contracts.activity.getActivity(activityId);
-    
-    // 获取活动标签
-    const tags = await this.contracts.activity.getActivityTags(activityId);
-    
-    return {
-      id: activity.id.toNumber(),
-      name: activity.name,
-      description: activity.description,
-      activityType: activity.activityType,
-      startTime: new Date(activity.startTime.toNumber() * 1000),
-      endTime: new Date(activity.endTime.toNumber() * 1000),
-      location: activity.location,
-      organizer: activity.organizer,
-      status: activity.status,
-      capacity: activity.capacity.toNumber(),
-      fee: activity.fee.toNumber(),
-      contentHash: activity.contentHash,
-      createdAt: new Date(activity.createdAt.toNumber() * 1000),
-      updatedAt: new Date(activity.updatedAt.toNumber() * 1000),
-      verificationStatus: activity.verificationStatus,
-      verifier: activity.verifier,
-      participantCount: activity.participantCount.toNumber(),
-      culturalTags: tags
-    };
   }
-  
+
+  // ===== NFT合约方法 =====
+
   /**
-   * 获取活动参与者列表
-   * @param {number} activityId - 活动ID
-   * @returns {Promise<array>} 参与者地址数组
+   * 铸造NFT
+   * @param {string} to 接收者钱包地址
+   * @param {string} name 资产名称
+   * @param {string} description 资产描述
+   * @param {number} assetType 资产类型 (0-4)
+   * @param {string} uri 元数据URI
+   * @param {string[]} culturalTags 文化标签数组
+   * @param {number} rarity 稀有度
+   * @returns {Promise<Object>} 交易结果
    */
-  async getActivityParticipants(activityId) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
+  async mintNFT(to, name, description, assetType, uri, culturalTags, rarity) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    return await this.contracts.activity.getActivityParticipants(activityId);
+    try {
+      const tx = await this.nftContract.mint(
+        to,
+        name,
+        description,
+        assetType,
+        uri,
+        culturalTags,
+        rarity
+      );
+      const receipt = await tx.wait();
+      
+      // 解析事件获取代币ID
+      const event = receipt.events.find(e => e.event === 'AssetCreated');
+      const tokenId = event.args.tokenId.toString();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        tokenId,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('铸造NFT失败:', error);
+      throw error;
+    }
   }
-  
+
   /**
-   * 获取用户组织的活动列表
-   * @param {string} organizer - 组织者地址
-   * @returns {Promise<array>} 活动ID数组
+   * 为活动铸造NFT
+   * @param {string} to 接收者钱包地址
+   * @param {string} name 资产名称
+   * @param {string} description 资产描述
+   * @param {number} assetType 资产类型 (0-4)
+   * @param {string} uri 元数据URI
+   * @param {string[]} culturalTags 文化标签数组
+   * @param {number} rarity 稀有度
+   * @param {string} activityId 活动ID
+   * @returns {Promise<Object>} 交易结果
    */
-  async getOrganizerActivities(organizer) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
+  async mintNFTForActivity(to, name, description, assetType, uri, culturalTags, rarity, activityId) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    const activityIds = await this.contracts.activity.getOrganizerActivities(organizer);
-    return activityIds.map(id => id.toNumber());
+    try {
+      const tx = await this.nftContract.mintForActivity(
+        to,
+        name,
+        description,
+        assetType,
+        uri,
+        culturalTags,
+        rarity,
+        activityId
+      );
+      const receipt = await tx.wait();
+      
+      // 解析事件获取代币ID
+      const event = receipt.events.find(e => e.event === 'AssetCreated');
+      const tokenId = event.args.tokenId.toString();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        tokenId,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('为活动铸造NFT失败:', error);
+      throw error;
+    }
   }
-  
+
   /**
-   * 获取用户参与的活动列表
-   * @param {string} participant - 参与者地址
-   * @returns {Promise<array>} 活动ID数组
+   * 批量铸造NFT
+   * @param {string[]} to 接收者钱包地址数组
+   * @param {string[]} names 资产名称数组
+   * @param {string[]} descriptions 资产描述数组
+   * @param {number[]} assetTypes 资产类型数组
+   * @param {string[]} uris 元数据URI数组
+   * @param {string[][]} culturalTagsArray 文化标签数组的数组
+   * @param {number[]} rarities 稀有度数组
+   * @returns {Promise<Object>} 交易结果
    */
-  async getParticipantActivities(participant) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
+  async batchMintNFT(to, names, descriptions, assetTypes, uris, culturalTagsArray, rarities) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    const activityIds = await this.contracts.activity.getParticipantActivities(participant);
-    return activityIds.map(id => id.toNumber());
+    try {
+      const tx = await this.nftContract.batchMint(
+        to,
+        names,
+        descriptions,
+        assetTypes,
+        uris,
+        culturalTagsArray,
+        rarities
+      );
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('批量铸造NFT失败:', error);
+      throw error;
+    }
   }
-  
+
   /**
-   * 获取特定标签的活动列表
-   * @param {string} tag - 文化标签
-   * @returns {Promise<array>} 活动ID数组
+   * 验证NFT资产
+   * @param {string} tokenId 代币ID
+   * @param {number} status 验证状态 (0-2)
+   * @returns {Promise<Object>} 交易结果
    */
-  async getActivitiesByTag(tag) {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
+  async verifyNFT(tokenId, status) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    const activityIds = await this.contracts.activity.getActivitiesByTag(tag);
-    return activityIds.map(id => id.toNumber());
+    try {
+      const tx = await this.nftContract.verifyAsset(tokenId, status);
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('验证NFT失败:', error);
+      throw error;
+    }
   }
-  
+
   /**
-   * 获取活动总数
-   * @returns {Promise<number>} 活动总数
+   * 将NFT关联到活动
+   * @param {string} tokenId 代币ID
+   * @param {string} activityId 活动ID
+   * @returns {Promise<Object>} 交易结果
    */
-  async getActivityCount() {
-    if (!this.contracts.activity) {
-      throw new Error('活动合约未初始化');
-    }
+  async linkNFTToActivity(tokenId, activityId) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
     
-    const count = await this.contracts.activity.getActivityCount();
-    return count.toNumber();
+    try {
+      const tx = await this.nftContract.linkToActivity(tokenId, activityId);
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('关联NFT到活动失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 销毁NFT
+   * @param {string} tokenId 代币ID
+   * @returns {Promise<Object>} 交易结果
+   */
+  async destroyNFT(tokenId) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tx = await this.nftContract.destroyAsset(tokenId);
+      const receipt = await tx.wait();
+      
+      return {
+        success: true,
+        txHash: receipt.transactionHash,
+        events: receipt.events
+      };
+    } catch (error) {
+      console.error('销毁NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取NFT资产信息
+   * @param {string} tokenId 代币ID
+   * @returns {Promise<Object>} NFT资产信息
+   */
+  async getNFT(tokenId) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const asset = await this.nftContract.getAsset(tokenId);
+      const tags = await this.nftContract.getAssetTags(tokenId);
+      const owner = await this.nftContract.ownerOf(tokenId);
+      const uri = await this.nftContract.tokenURI(tokenId);
+      
+      return {
+        tokenId,
+        name: asset.name,
+        description: asset.description,
+        assetType: asset.assetType,
+        creator: asset.creator,
+        owner,
+        createdAt: new Date(asset.createdAt.toNumber() * 1000),
+        rarity: asset.rarity.toString(),
+        verificationStatus: asset.verificationStatus,
+        verifier: asset.verifier,
+        activityId: asset.activityId.toString(),
+        isDestroyed: asset.isDestroyed,
+        culturalTags: tags,
+        tokenURI: uri
+      };
+    } catch (error) {
+      console.error('获取NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取活动关联的NFT列表
+   * @param {string} activityId 活动ID
+   * @returns {Promise<Array>} NFT代币ID数组
+   */
+  async getActivityNFTs(activityId) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tokenIds = await this.nftContract.getActivityAssets(activityId);
+      return tokenIds.map(id => id.toString());
+    } catch (error) {
+      console.error('获取活动NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取创建者的NFT列表
+   * @param {string} creator 创建者钱包地址
+   * @returns {Promise<Array>} NFT代币ID数组
+   */
+  async getCreatorNFTs(creator) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tokenIds = await this.nftContract.getCreatorAssets(creator);
+      return tokenIds.map(id => id.toString());
+    } catch (error) {
+      console.error('获取创建者NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取特定标签的NFT列表
+   * @param {string} tag 文化标签
+   * @returns {Promise<Array>} NFT代币ID数组
+   */
+  async getNFTsByTag(tag) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const tokenIds = await this.nftContract.getAssetsByTag(tag);
+      return tokenIds.map(id => id.toString());
+    } catch (error) {
+      console.error('获取标签NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取用户拥有的NFT列表
+   * @param {string} owner 所有者钱包地址
+   * @returns {Promise<Array>} NFT代币ID数组
+   */
+  async getOwnerNFTs(owner) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const balance = await this.nftContract.balanceOf(owner);
+      const tokenIds = [];
+      
+      for (let i = 0; i < balance; i++) {
+        const tokenId = await this.nftContract.tokenOfOwnerByIndex(owner, i);
+        tokenIds.push(tokenId.toString());
+      }
+      
+      return tokenIds;
+    } catch (error) {
+      console.error('获取所有者NFT失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取NFT总数
+   * @returns {Promise<string>} NFT总数
+   */
+  async getNFTCount() {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      const count = await this.nftContract.getAssetCount();
+      return count.toString();
+    } catch (error) {
+      console.error('获取NFT总数失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 检查地址是否为铸造者
+   * @param {string} address 钱包地址
+   * @returns {Promise<boolean>} 是否为铸造者
+   */
+  async isMinter(address) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      return await this.nftContract.isMinter(address);
+    } catch (error) {
+      console.error('检查铸造者失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 检查地址是否有活动角色
+   * @param {string} address 钱包地址
+   * @returns {Promise<boolean>} 是否有活动角色
+   */
+  async hasActivityRole(address) {
+    if (!this.initialized) throw new Error('区块链服务未初始化');
+    
+    try {
+      return await this.nftContract.hasActivityRole(address);
+    } catch (error) {
+      console.error('检查活动角色失败:', error);
+      throw error;
+    }
   }
 }
 

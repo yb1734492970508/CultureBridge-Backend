@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const authRoutes = require('./routes/auth.routes');
 const blockchainRoutes = require('./routes/blockchain.routes');
 const activityRoutes = require('./routes/activity.routes');
+const nftRoutes = require('./routes/nft.routes');
 
 // 初始化区块链服务
 const blockchainService = require('./blockchain/service');
@@ -24,6 +25,7 @@ app.use(morgan('dev'));
 app.use('/api/auth', authRoutes);
 app.use('/api/blockchain', blockchainRoutes);
 app.use('/api/activities', activityRoutes);
+app.use('/api/nft', nftRoutes);
 
 // 根路由
 app.get('/', (req, res) => {
