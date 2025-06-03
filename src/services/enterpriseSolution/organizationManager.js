@@ -1,893 +1,818 @@
 /**
- * 企业组织架构管理模块
- * 
- * 该模块实现了企业组织架构的创建、管理和查询功能，包括：
- * - 多层级部门结构管理
- * - 角色与职位管理
- * - 组织关系可视化支持
- * - 批量用户导入与同步
- * 
- * @module services/enterpriseSolution/organizationManager
+ * 组织架构管理服务
+ * 负责企业组织结构的定义、管理和维护，支持多层级部门结构、角色与职位管理、组织关系可视化和批量用户导入与同步
  */
 
-const mongoose = require("mongoose");
-const Organization = require("../../models/organization.model");
-const Department = require("../../models/department.model");
-const Role = require("../../models/role.model");
-const Position = require("../../models/position.model");
-const User = require("../../models/user.model");
-const logger = require("../../utils/logger");
-
-// 企业组织架构管理配置
-const ORGANIZATION_MANAGER_CONFIG = {
-  maxDepth: 10, // 最大部门层级深度
-  defaultRoles: ["Admin", "Manager", "Employee"], // 默认角色
-  defaultPositions: ["CEO", "Director", "Team Lead", "Member"], // 默认职位
-  maxUsersPerDepartment: 1000, // 单个部门最大用户数
-  maxRolesPerOrg: 100, // 单个组织最大角色数
-  maxPositionsPerOrg: 200, // 单个组织最大职位数
-};
+const mongoose = require('mongoose');
+const { Organization, Department, Role, UserOrganization } = require('../../models/organization.model');
+const { Permission, PermissionTemplate, PermissionLog } = require('../../models/permission.model');
+const { User } = require('../../models/user.model');
+const blockchainService = require('../../blockchain/token.service');
+const logger = require('../../utils/logger');
 
 /**
- * 企业组织架构管理器
- * 管理企业组织架构相关功能
+ * 组织管理服务
  */
 class OrganizationManager {
-  constructor() {
-    logger.info("企业组织架构管理器已初始化");
-  }
-
   /**
-   * 创建新的企业组织
-   * @param {Object} orgData - 企业组织数据
-   * @param {string} creatorId - 创建者ID
-   * @returns {Promise<Object>} 创建结果
+   * 创建新组织
+   * @param {Object} organizationData - 组织数据
+   * @returns {Promise<Object>} - 创建的组织
    */
-  async createOrganization(orgData, creatorId) {
+  async createOrganization(organizationData) {
     try {
-      // 验证组织数据
-      this.validateOrganizationData(orgData);
-
-      // 检查是否存在同名组织
-      const existingOrg = await Organization.findOne({ name: orgData.name });
-      if (existingOrg) {
-        throw new Error(`已存在同名企业组织: ${orgData.name}`);
-      }
-
-      // 获取创建者
-      const creator = await User.findById(creatorId);
-      if (!creator) {
-        throw new Error(`创建者不存在: ${creatorId}`);
-      }
-
-      // 创建企业组织记录
+      // 创建组织记录
       const organization = new Organization({
-        name: orgData.name,
-        description: orgData.description || "",
-        industry: orgData.industry || "",
-        size: orgData.size || "",
-        website: orgData.website || "",
-        address: orgData.address || {},
-        createdBy: creatorId,
-        admins: [creatorId], // 默认创建者为管理员
-        status: "active",
+        name: organizationData.name,
+        description: organizationData.description,
+        logo: organizationData.logo,
+        industry: organizationData.industry,
+        size: organizationData.size,
+        country: organizationData.country,
+        address: organizationData.address,
+        contactEmail: organizationData.contactEmail,
+        contactPhone: organizationData.contactPhone,
+        website: organizationData.website,
+        settings: organizationData.settings || {}
       });
 
-      // 保存企业组织记录
-      await organization.save();
+      // 保存组织记录
+      const savedOrganization = await organization.save();
 
-      // 创建根部门
-      const rootDepartment = await this.createDepartment(
-        {
-          name: organization.name, // 根部门名称与组织同名
-          description: "Root department",
-          organizationId: organization._id,
-          isRoot: true,
-        },
-        creatorId
-      );
-
-      // 更新组织的根部门ID
-      organization.rootDepartment = rootDepartment.departmentId;
-      await organization.save();
+      // 创建默认部门
+      const rootDepartment = new Department({
+        organizationId: savedOrganization._id,
+        name: '总部',
+        description: '组织总部',
+        level: 0,
+        path: '/'
+      });
+      await rootDepartment.save();
 
       // 创建默认角色
-      await this.createDefaultRoles(organization._id, creatorId);
+      const adminRole = new Role({
+        organizationId: savedOrganization._id,
+        name: '管理员',
+        description: '组织管理员',
+        isSystem: true
+      });
+      const memberRole = new Role({
+        organizationId: savedOrganization._id,
+        name: '成员',
+        description: '组织成员',
+        isSystem: true
+      });
+      await adminRole.save();
+      await memberRole.save();
 
-      // 创建默认职位
-      await this.createDefaultPositions(organization._id, creatorId);
+      // 如果提供了区块链集成，则在区块链上注册组织
+      if (organizationData.enableBlockchain) {
+        try {
+          const blockchainAddress = await blockchainService.registerOrganizationOnChain(
+            savedOrganization._id.toString(),
+            organizationData.name
+          );
+          
+          // 更新组织记录，添加区块链地址
+          savedOrganization.blockchainAddress = blockchainAddress;
+          await savedOrganization.save();
+        } catch (error) {
+          logger.error(`区块链注册组织失败: ${error.message}`, { 
+            organizationId: savedOrganization._id 
+          });
+          // 继续处理，不中断流程
+        }
+      }
 
-      logger.info(`企业组织创建成功: ${organization._id}`);
-      return {
-        success: true,
-        organizationId: organization._id,
-        organization,
-        rootDepartmentId: rootDepartment.departmentId,
-      };
+      return savedOrganization;
     } catch (error) {
-      logger.error(`创建企业组织失败: ${error.message}`);
-      throw new Error(`创建企业组织失败: ${error.message}`);
+      logger.error(`创建组织失败: ${error.message}`);
+      throw new Error(`创建组织失败: ${error.message}`);
     }
   }
 
   /**
-   * 验证企业组织数据
-   * @param {Object} orgData - 企业组织数据
+   * 获取组织详情
+   * @param {string} organizationId - 组织ID
+   * @returns {Promise<Object>} - 组织详情
    */
-  validateOrganizationData(orgData) {
-    if (!orgData.name) {
-      throw new Error("企业组织名称不能为空");
+  async getOrganization(organizationId) {
+    try {
+      const organization = await Organization.findById(organizationId);
+      if (!organization) {
+        throw new Error('组织不存在');
+      }
+      return organization;
+    } catch (error) {
+      logger.error(`获取组织详情失败: ${error.message}`, { organizationId });
+      throw new Error(`获取组织详情失败: ${error.message}`);
     }
-    // 可添加更多验证规则，如行业、规模等
+  }
+
+  /**
+   * 更新组织信息
+   * @param {string} organizationId - 组织ID
+   * @param {Object} updateData - 更新数据
+   * @returns {Promise<Object>} - 更新后的组织
+   */
+  async updateOrganization(organizationId, updateData) {
+    try {
+      const organization = await Organization.findById(organizationId);
+      if (!organization) {
+        throw new Error('组织不存在');
+      }
+
+      // 更新组织字段
+      const allowedFields = [
+        'name', 'description', 'logo', 'industry', 'size', 
+        'country', 'address', 'contactEmail', 'contactPhone', 
+        'website', 'settings'
+      ];
+      
+      allowedFields.forEach(field => {
+        if (updateData[field] !== undefined) {
+          organization[field] = updateData[field];
+        }
+      });
+
+      // 保存更新
+      const updatedOrganization = await organization.save();
+
+      // 如果组织名称更改且有区块链地址，则更新链上信息
+      if (updateData.name && organization.blockchainAddress) {
+        try {
+          await blockchainService.updateOrganizationOnChain(
+            organizationId,
+            updateData.name,
+            organization.blockchainAddress
+          );
+        } catch (error) {
+          logger.error(`区块链更新组织失败: ${error.message}`, { 
+            organizationId 
+          });
+          // 继续处理，不中断流程
+        }
+      }
+
+      return updatedOrganization;
+    } catch (error) {
+      logger.error(`更新组织失败: ${error.message}`, { organizationId });
+      throw new Error(`更新组织失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 删除组织
+   * @param {string} organizationId - 组织ID
+   * @returns {Promise<boolean>} - 删除结果
+   */
+  async deleteOrganization(organizationId) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // 检查组织是否存在
+      const organization = await Organization.findById(organizationId);
+      if (!organization) {
+        throw new Error('组织不存在');
+      }
+
+      // 删除组织相关的所有数据
+      await Department.deleteMany({ organizationId }, { session });
+      await Role.deleteMany({ organizationId }, { session });
+      await UserOrganization.deleteMany({ organizationId }, { session });
+      await Permission.deleteMany({ organizationId }, { session });
+      await PermissionTemplate.deleteMany({ organizationId }, { session });
+      await PermissionLog.deleteMany({ organizationId }, { session });
+      
+      // 删除组织本身
+      await Organization.findByIdAndDelete(organizationId, { session });
+
+      // 如果有区块链地址，则在区块链上标记组织为已删除
+      if (organization.blockchainAddress) {
+        try {
+          await blockchainService.deactivateOrganizationOnChain(
+            organizationId,
+            organization.blockchainAddress
+          );
+        } catch (error) {
+          logger.error(`区块链删除组织失败: ${error.message}`, { 
+            organizationId 
+          });
+          // 继续处理，不中断流程
+        }
+      }
+
+      await session.commitTransaction();
+      return true;
+    } catch (error) {
+      await session.abortTransaction();
+      logger.error(`删除组织失败: ${error.message}`, { organizationId });
+      throw new Error(`删除组织失败: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
   }
 
   /**
    * 创建部门
-   * @param {Object} deptData - 部门数据
-   * @param {string} creatorId - 创建者ID
-   * @returns {Promise<Object>} 创建结果
+   * @param {string} organizationId - 组织ID
+   * @param {Object} departmentData - 部门数据
+   * @returns {Promise<Object>} - 创建的部门
    */
-  async createDepartment(deptData, creatorId) {
+  async createDepartment(organizationId, departmentData) {
     try {
-      // 验证部门数据
-      this.validateDepartmentData(deptData);
-
-      // 获取所属组织
-      const organization = await Organization.findById(deptData.organizationId);
+      // 检查组织是否存在
+      const organization = await Organization.findById(organizationId);
       if (!organization) {
-        throw new Error(`所属组织不存在: ${deptData.organizationId}`);
+        throw new Error('组织不存在');
       }
 
-      // 检查权限（只有组织管理员或上级部门管理员可创建）
-      await this.checkAdminPermission(organization, creatorId);
-
-      // 检查父部门是否存在（如果不是根部门）
-      let parentDepartment = null;
-      if (deptData.parentId && !deptData.isRoot) {
-        parentDepartment = await Department.findById(deptData.parentId);
+      // 如果指定了父部门，检查父部门是否存在
+      let parentPath = '/';
+      let level = 0;
+      
+      if (departmentData.parentId) {
+        const parentDepartment = await Department.findOne({
+          _id: departmentData.parentId,
+          organizationId
+        });
+        
         if (!parentDepartment) {
-          throw new Error(`父部门不存在: ${deptData.parentId}`);
+          throw new Error('父部门不存在');
         }
-        // 检查部门层级深度
-        const depth = await this.getDepartmentDepth(parentDepartment);
-        if (depth >= ORGANIZATION_MANAGER_CONFIG.maxDepth) {
-          throw new Error("部门层级深度超过限制");
-        }
+        
+        parentPath = parentDepartment.path;
+        level = parentDepartment.level + 1;
       }
 
-      // 检查同级部门名称是否重复
-      const existingDept = await Department.findOne({
-        organizationId: deptData.organizationId,
-        parentId: deptData.parentId || null,
-        name: deptData.name,
-      });
-      if (existingDept) {
-        throw new Error(`同级部门下已存在同名部门: ${deptData.name}`);
-      }
+      // 创建部门路径
+      const departmentId = new mongoose.Types.ObjectId();
+      const path = `${parentPath}${departmentId}/`;
 
       // 创建部门记录
       const department = new Department({
-        name: deptData.name,
-        description: deptData.description || "",
-        organizationId: deptData.organizationId,
-        parentId: deptData.parentId || null,
-        manager: deptData.manager || null,
-        members: deptData.members || [],
-        createdBy: creatorId,
-        status: "active",
+        _id: departmentId,
+        organizationId,
+        name: departmentData.name,
+        description: departmentData.description,
+        parentId: departmentData.parentId,
+        level,
+        path,
+        managerId: departmentData.managerId
       });
 
       // 保存部门记录
-      await department.save();
-
-      logger.info(`部门创建成功: ${department._id}`);
-      return {
-        success: true,
-        departmentId: department._id,
-        department,
-      };
+      return await department.save();
     } catch (error) {
-      logger.error(`创建部门失败: ${error.message}`);
+      logger.error(`创建部门失败: ${error.message}`, { organizationId });
       throw new Error(`创建部门失败: ${error.message}`);
     }
   }
 
   /**
-   * 验证部门数据
-   * @param {Object} deptData - 部门数据
+   * 获取部门详情
+   * @param {string} departmentId - 部门ID
+   * @returns {Promise<Object>} - 部门详情
    */
-  validateDepartmentData(deptData) {
-    if (!deptData.name) {
-      throw new Error("部门名称不能为空");
+  async getDepartment(departmentId) {
+    try {
+      const department = await Department.findById(departmentId);
+      if (!department) {
+        throw new Error('部门不存在');
+      }
+      return department;
+    } catch (error) {
+      logger.error(`获取部门详情失败: ${error.message}`, { departmentId });
+      throw new Error(`获取部门详情失败: ${error.message}`);
     }
-    if (!deptData.organizationId) {
-      throw new Error("必须指定所属组织ID");
-    }
-    // 根部门不能有父部门ID
-    if (deptData.isRoot && deptData.parentId) {
-        throw new Error("根部门不能有父部门");
-    }
-    // 非根部门必须有父部门ID，除非它是第一级部门
-    // if (!deptData.isRoot && !deptData.parentId) {
-    //     // 允许创建第一级部门，其parentId为null
-    // }
   }
 
   /**
-   * 获取部门层级深度
-   * @param {Object} department - 部门对象
-   * @returns {Promise<number>} 深度
+   * 更新部门信息
+   * @param {string} departmentId - 部门ID
+   * @param {Object} updateData - 更新数据
+   * @returns {Promise<Object>} - 更新后的部门
    */
-  async getDepartmentDepth(department) {
-    let depth = 1;
-    let current = department;
-    while (current.parentId) {
-      current = await Department.findById(current.parentId);
-      if (!current) break; // 防止死循环
-      depth++;
-      if (depth > ORGANIZATION_MANAGER_CONFIG.maxDepth + 5) { // 增加安全检查
-          logger.warn(`部门层级深度计算可能存在循环引用: ${department._id}`);
-          break;
+  async updateDepartment(departmentId, updateData) {
+    try {
+      const department = await Department.findById(departmentId);
+      if (!department) {
+        throw new Error('部门不存在');
       }
+
+      // 更新部门字段
+      const allowedFields = ['name', 'description', 'managerId'];
+      
+      allowedFields.forEach(field => {
+        if (updateData[field] !== undefined) {
+          department[field] = updateData[field];
+        }
+      });
+
+      // 保存更新
+      return await department.save();
+    } catch (error) {
+      logger.error(`更新部门失败: ${error.message}`, { departmentId });
+      throw new Error(`更新部门失败: ${error.message}`);
     }
-    return depth;
+  }
+
+  /**
+   * 删除部门
+   * @param {string} departmentId - 部门ID
+   * @returns {Promise<boolean>} - 删除结果
+   */
+  async deleteDepartment(departmentId) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // 检查部门是否存在
+      const department = await Department.findById(departmentId);
+      if (!department) {
+        throw new Error('部门不存在');
+      }
+
+      // 检查是否有子部门
+      const childDepartments = await Department.find({
+        path: { $regex: `${department.path}` },
+        _id: { $ne: departmentId }
+      });
+
+      if (childDepartments.length > 0) {
+        throw new Error('无法删除含有子部门的部门');
+      }
+
+      // 检查是否有用户关联到此部门
+      const userCount = await UserOrganization.countDocuments({
+        departmentId
+      });
+
+      if (userCount > 0) {
+        throw new Error('无法删除含有用户的部门');
+      }
+
+      // 删除部门
+      await Department.findByIdAndDelete(departmentId, { session });
+
+      await session.commitTransaction();
+      return true;
+    } catch (error) {
+      await session.abortTransaction();
+      logger.error(`删除部门失败: ${error.message}`, { departmentId });
+      throw new Error(`删除部门失败: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  /**
+   * 获取组织的部门列表
+   * @param {string} organizationId - 组织ID
+   * @returns {Promise<Array>} - 部门列表
+   */
+  async getDepartments(organizationId) {
+    try {
+      return await Department.find({ organizationId }).sort({ level: 1, name: 1 });
+    } catch (error) {
+      logger.error(`获取部门列表失败: ${error.message}`, { organizationId });
+      throw new Error(`获取部门列表失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取部门树结构
+   * @param {string} organizationId - 组织ID
+   * @returns {Promise<Array>} - 部门树结构
+   */
+  async getDepartmentTree(organizationId) {
+    try {
+      const departments = await Department.find({ organizationId }).sort({ level: 1, name: 1 });
+      
+      // 构建部门树
+      const departmentMap = {};
+      const rootDepartments = [];
+
+      // 首先将所有部门放入映射
+      departments.forEach(dept => {
+        departmentMap[dept._id] = {
+          ...dept.toObject(),
+          children: []
+        };
+      });
+
+      // 然后构建树结构
+      departments.forEach(dept => {
+        if (dept.parentId && departmentMap[dept.parentId]) {
+          departmentMap[dept.parentId].children.push(departmentMap[dept._id]);
+        } else {
+          rootDepartments.push(departmentMap[dept._id]);
+        }
+      });
+
+      return rootDepartments;
+    } catch (error) {
+      logger.error(`获取部门树失败: ${error.message}`, { organizationId });
+      throw new Error(`获取部门树失败: ${error.message}`);
+    }
   }
 
   /**
    * 创建角色
+   * @param {string} organizationId - 组织ID
    * @param {Object} roleData - 角色数据
-   * @param {string} creatorId - 创建者ID
-   * @returns {Promise<Object>} 创建结果
+   * @returns {Promise<Object>} - 创建的角色
    */
-  async createRole(roleData, creatorId) {
+  async createRole(organizationId, roleData) {
     try {
-      // 验证角色数据
-      this.validateRoleData(roleData);
-
-      // 获取所属组织
-      const organization = await Organization.findById(roleData.organizationId);
+      // 检查组织是否存在
+      const organization = await Organization.findById(organizationId);
       if (!organization) {
-        throw new Error(`所属组织不存在: ${roleData.organizationId}`);
-      }
-
-      // 检查权限
-      await this.checkAdminPermission(organization, creatorId);
-
-      // 检查角色数量限制
-      const roleCount = await Role.countDocuments({ organizationId: roleData.organizationId });
-      if (roleCount >= ORGANIZATION_MANAGER_CONFIG.maxRolesPerOrg) {
-        throw new Error("组织角色数量已达上限");
-      }
-
-      // 检查同名角色是否存在
-      const existingRole = await Role.findOne({
-        organizationId: roleData.organizationId,
-        name: roleData.name,
-      });
-      if (existingRole) {
-        throw new Error(`组织内已存在同名角色: ${roleData.name}`);
+        throw new Error('组织不存在');
       }
 
       // 创建角色记录
       const role = new Role({
+        organizationId,
         name: roleData.name,
-        description: roleData.description || "",
-        organizationId: roleData.organizationId,
-        permissions: roleData.permissions || [],
-        createdBy: creatorId,
-        isDefault: false, // 自定义创建的角色不是默认角色
+        description: roleData.description,
+        isSystem: roleData.isSystem || false,
+        permissions: roleData.permissions || []
       });
 
       // 保存角色记录
-      await role.save();
-
-      logger.info(`角色创建成功: ${role._id}`);
-      return {
-        success: true,
-        roleId: role._id,
-        role,
-      };
+      return await role.save();
     } catch (error) {
-      logger.error(`创建角色失败: ${error.message}`);
+      logger.error(`创建角色失败: ${error.message}`, { organizationId });
       throw new Error(`创建角色失败: ${error.message}`);
     }
   }
 
   /**
-   * 验证角色数据
-   * @param {Object} roleData - 角色数据
-   */
-  validateRoleData(roleData) {
-    if (!roleData.name) {
-      throw new Error("角色名称不能为空");
-    }
-    if (!roleData.organizationId) {
-      throw new Error("必须指定所属组织ID");
-    }
-    if (roleData.permissions && !Array.isArray(roleData.permissions)) {
-      throw new Error("权限必须是数组格式");
-    }
-  }
-
-  /**
-   * 创建职位
-   * @param {Object} positionData - 职位数据
-   * @param {string} creatorId - 创建者ID
-   * @returns {Promise<Object>} 创建结果
-   */
-  async createPosition(positionData, creatorId) {
-    try {
-      // 验证职位数据
-      this.validatePositionData(positionData);
-
-      // 获取所属组织
-      const organization = await Organization.findById(positionData.organizationId);
-      if (!organization) {
-        throw new Error(`所属组织不存在: ${positionData.organizationId}`);
-      }
-
-      // 检查权限
-      await this.checkAdminPermission(organization, creatorId);
-
-      // 检查职位数量限制
-      const positionCount = await Position.countDocuments({ organizationId: positionData.organizationId });
-      if (positionCount >= ORGANIZATION_MANAGER_CONFIG.maxPositionsPerOrg) {
-        throw new Error("组织职位数量已达上限");
-      }
-
-      // 检查同名职位是否存在
-      const existingPosition = await Position.findOne({
-        organizationId: positionData.organizationId,
-        title: positionData.title,
-      });
-      if (existingPosition) {
-        throw new Error(`组织内已存在同名职位: ${positionData.title}`);
-      }
-
-      // 创建职位记录
-      const position = new Position({
-        title: positionData.title,
-        description: positionData.description || "",
-        organizationId: positionData.organizationId,
-        departmentId: positionData.departmentId || null,
-        responsibilities: positionData.responsibilities || [],
-        requiredSkills: positionData.requiredSkills || [],
-        createdBy: creatorId,
-        isDefault: false,
-      });
-
-      // 保存职位记录
-      await position.save();
-
-      logger.info(`职位创建成功: ${position._id}`);
-      return {
-        success: true,
-        positionId: position._id,
-        position,
-      };
-    } catch (error) {
-      logger.error(`创建职位失败: ${error.message}`);
-      throw new Error(`创建职位失败: ${error.message}`);
-    }
-  }
-
-  /**
-   * 验证职位数据
-   * @param {Object} positionData - 职位数据
-   */
-  validatePositionData(positionData) {
-    if (!positionData.title) {
-      throw new Error("职位名称不能为空");
-    }
-    if (!positionData.organizationId) {
-      throw new Error("必须指定所属组织ID");
-    }
-    // 可选：检查departmentId是否存在
-  }
-
-  /**
-   * 创建默认角色
-   * @param {string} organizationId - 组织ID
-   * @param {string} creatorId - 创建者ID
-   */
-  async createDefaultRoles(organizationId, creatorId) {
-    const defaultRoles = ORGANIZATION_MANAGER_CONFIG.defaultRoles;
-    for (const roleName of defaultRoles) {
-      try {
-        await this.createRole(
-          {
-            name: roleName,
-            description: `Default ${roleName} role`,
-            organizationId,
-            permissions: this.getDefaultPermissionsForRole(roleName), // 获取角色的默认权限
-            isDefault: true,
-          },
-          creatorId
-        );
-      } catch (error) {
-        // 如果角色已存在或其他错误，记录日志但继续
-        logger.warn(`创建默认角色 ${roleName} 失败: ${error.message}`);
-      }
-    }
-  }
-
-  /**
-   * 创建默认职位
-   * @param {string} organizationId - 组织ID
-   * @param {string} creatorId - 创建者ID
-   */
-  async createDefaultPositions(organizationId, creatorId) {
-    const defaultPositions = ORGANIZATION_MANAGER_CONFIG.defaultPositions;
-    for (const positionTitle of defaultPositions) {
-      try {
-        await this.createPosition(
-          {
-            title: positionTitle,
-            description: `Default ${positionTitle} position`,
-            organizationId,
-            isDefault: true,
-          },
-          creatorId
-        );
-      } catch (error) {
-        logger.warn(`创建默认职位 ${positionTitle} 失败: ${error.message}`);
-      }
-    }
-  }
-
-  /**
-   * 获取角色的默认权限（示例）
-   * @param {string} roleName - 角色名称
-   * @returns {Array<string>} 权限列表
-   */
-  getDefaultPermissionsForRole(roleName) {
-    // 这里应根据实际权限系统定义返回权限列表
-    switch (roleName) {
-      case "Admin":
-        return ["manage_organization", "manage_users", "manage_departments", "manage_roles", "manage_positions", "view_all_content"];
-      case "Manager":
-        return ["manage_department_members", "view_department_content", "assign_tasks"];
-      case "Employee":
-        return ["view_content", "create_content", "collaborate"];
-      default:
-        return [];
-    }
-  }
-
-  /**
-   * 将用户添加到部门
-   * @param {string} departmentId - 部门ID
-   * @param {string} userId - 用户ID
-   * @param {string} adderId - 添加操作者ID
-   * @returns {Promise<Object>} 添加结果
-   */
-  async addUserToDepartment(departmentId, userId, adderId) {
-    try {
-      const department = await Department.findById(departmentId);
-      if (!department) {
-        throw new Error(`部门不存在: ${departmentId}`);
-      }
-
-      const user = await User.findById(userId);
-      if (!user) {
-        throw new Error(`用户不存在: ${userId}`);
-      }
-
-      // 检查权限（部门经理或组织管理员）
-      await this.checkDepartmentManagerPermission(department, adderId);
-
-      // 检查部门成员数量限制
-      if (department.members.length >= ORGANIZATION_MANAGER_CONFIG.maxUsersPerDepartment) {
-        throw new Error("部门成员数量已达上限");
-      }
-
-      // 检查用户是否已在该部门
-      if (department.members.includes(userId)) {
-        throw new Error(`用户 ${userId} 已在该部门 ${departmentId}`);
-      }
-
-      // 添加用户到部门成员列表
-      department.members.push(userId);
-      await department.save();
-
-      // 可选：更新用户的部门信息
-      // user.department = departmentId;
-      // await user.save();
-
-      logger.info(`用户 ${userId} 已添加到部门 ${departmentId}`);
-      return { success: true, departmentId, userId };
-    } catch (error) {
-      logger.error(`将用户添加到部门失败: ${error.message}`);
-      throw new Error(`将用户添加到部门失败: ${error.message}`);
-    }
-  }
-
-  /**
-   * 从部门移除用户
-   * @param {string} departmentId - 部门ID
-   * @param {string} userId - 用户ID
-   * @param {string} removerId - 移除操作者ID
-   * @returns {Promise<Object>} 移除结果
-   */
-  async removeUserFromDepartment(departmentId, userId, removerId) {
-    try {
-      const department = await Department.findById(departmentId);
-      if (!department) {
-        throw new Error(`部门不存在: ${departmentId}`);
-      }
-
-      // 检查权限（部门经理或组织管理员）
-      await this.checkDepartmentManagerPermission(department, removerId);
-
-      // 检查用户是否在该部门
-      const userIndex = department.members.indexOf(userId);
-      if (userIndex === -1) {
-        throw new Error(`用户 ${userId} 不在该部门 ${departmentId}`);
-      }
-
-      // 从成员列表中移除用户
-      department.members.splice(userIndex, 1);
-      await department.save();
-
-      // 可选：清除用户的部门信息
-      // const user = await User.findById(userId);
-      // if (user && user.department === departmentId) {
-      //   user.department = null;
-      //   await user.save();
-      // }
-
-      logger.info(`用户 ${userId} 已从部门 ${departmentId} 移除`);
-      return { success: true, departmentId, userId };
-    } catch (error) {
-      logger.error(`从部门移除用户失败: ${error.message}`);
-      throw new Error(`从部门移除用户失败: ${error.message}`);
-    }
-  }
-
-  /**
-   * 分配角色给用户
-   * @param {string} organizationId - 组织ID
-   * @param {string} userId - 用户ID
+   * 获取角色详情
    * @param {string} roleId - 角色ID
-   * @param {string} assignerId - 分配者ID
-   * @returns {Promise<Object>} 分配结果
+   * @returns {Promise<Object>} - 角色详情
    */
-  async assignRoleToUser(organizationId, userId, roleId, assignerId) {
+  async getRole(roleId) {
     try {
-      const organization = await Organization.findById(organizationId);
-      if (!organization) {
-        throw new Error(`组织不存在: ${organizationId}`);
-      }
-
-      const user = await User.findById(userId);
-      if (!user) {
-        throw new Error(`用户不存在: ${userId}`);
-      }
-
       const role = await Role.findById(roleId);
-      if (!role || role.organizationId.toString() !== organizationId) {
-        throw new Error(`角色不存在或不属于该组织: ${roleId}`);
+      if (!role) {
+        throw new Error('角色不存在');
       }
-
-      // 检查权限（组织管理员）
-      await this.checkAdminPermission(organization, assignerId);
-
-      // 检查用户是否已有该角色
-      if (user.roles && user.roles.includes(roleId)) {
-        throw new Error(`用户 ${userId} 已拥有角色 ${roleId}`);
-      }
-
-      // 添加角色到用户的角色列表
-      if (!user.roles) {
-        user.roles = [];
-      }
-      user.roles.push(roleId);
-      await user.save();
-
-      logger.info(`角色 ${roleId} 已分配给用户 ${userId}`);
-      return { success: true, userId, roleId };
+      return role;
     } catch (error) {
-      logger.error(`分配角色给用户失败: ${error.message}`);
-      throw new Error(`分配角色给用户失败: ${error.message}`);
+      logger.error(`获取角色详情失败: ${error.message}`, { roleId });
+      throw new Error(`获取角色详情失败: ${error.message}`);
     }
   }
 
   /**
-   * 撤销用户角色
-   * @param {string} organizationId - 组织ID
-   * @param {string} userId - 用户ID
+   * 更新角色信息
    * @param {string} roleId - 角色ID
-   * @param {string} revokerId - 撤销者ID
-   * @returns {Promise<Object>} 撤销结果
+   * @param {Object} updateData - 更新数据
+   * @returns {Promise<Object>} - 更新后的角色
    */
-  async revokeRoleFromUser(organizationId, userId, roleId, revokerId) {
+  async updateRole(roleId, updateData) {
     try {
-      const organization = await Organization.findById(organizationId);
-      if (!organization) {
-        throw new Error(`组织不存在: ${organizationId}`);
+      const role = await Role.findById(roleId);
+      if (!role) {
+        throw new Error('角色不存在');
       }
 
-      const user = await User.findById(userId);
-      if (!user) {
-        throw new Error(`用户不存在: ${userId}`);
+      // 系统角色只能更新描述和权限
+      if (role.isSystem) {
+        if (updateData.description !== undefined) {
+          role.description = updateData.description;
+        }
+        if (updateData.permissions !== undefined) {
+          role.permissions = updateData.permissions;
+        }
+      } else {
+        // 非系统角色可以更新所有字段
+        const allowedFields = ['name', 'description', 'permissions'];
+        
+        allowedFields.forEach(field => {
+          if (updateData[field] !== undefined) {
+            role[field] = updateData[field];
+          }
+        });
       }
 
-      // 检查权限（组织管理员）
-      await this.checkAdminPermission(organization, revokerId);
-
-      // 检查用户是否拥有该角色
-      const roleIndex = user.roles ? user.roles.indexOf(roleId) : -1;
-      if (roleIndex === -1) {
-        throw new Error(`用户 ${userId} 没有角色 ${roleId}`);
-      }
-
-      // 从用户角色列表中移除角色
-      user.roles.splice(roleIndex, 1);
-      await user.save();
-
-      logger.info(`用户 ${userId} 的角色 ${roleId} 已被撤销`);
-      return { success: true, userId, roleId };
+      // 保存更新
+      return await role.save();
     } catch (error) {
-      logger.error(`撤销用户角色失败: ${error.message}`);
-      throw new Error(`撤销用户角色失败: ${error.message}`);
+      logger.error(`更新角色失败: ${error.message}`, { roleId });
+      throw new Error(`更新角色失败: ${error.message}`);
     }
   }
 
   /**
-   * 分配职位给用户
+   * 删除角色
+   * @param {string} roleId - 角色ID
+   * @returns {Promise<boolean>} - 删除结果
+   */
+  async deleteRole(roleId) {
+    try {
+      // 检查角色是否存在
+      const role = await Role.findById(roleId);
+      if (!role) {
+        throw new Error('角色不存在');
+      }
+
+      // 系统角色不能删除
+      if (role.isSystem) {
+        throw new Error('系统角色不能删除');
+      }
+
+      // 检查是否有用户关联到此角色
+      const userCount = await UserOrganization.countDocuments({
+        roleIds: roleId
+      });
+
+      if (userCount > 0) {
+        throw new Error('无法删除已分配给用户的角色');
+      }
+
+      // 删除角色
+      await Role.findByIdAndDelete(roleId);
+      return true;
+    } catch (error) {
+      logger.error(`删除角色失败: ${error.message}`, { roleId });
+      throw new Error(`删除角色失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取组织的角色列表
+   * @param {string} organizationId - 组织ID
+   * @returns {Promise<Array>} - 角色列表
+   */
+  async getRoles(organizationId) {
+    try {
+      return await Role.find({ organizationId }).sort({ isSystem: -1, name: 1 });
+    } catch (error) {
+      logger.error(`获取角色列表失败: ${error.message}`, { organizationId });
+      throw new Error(`获取角色列表失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 批量导入用户到组织
+   * @param {string} organizationId - 组织ID
+   * @param {Array} users - 用户数据数组
+   * @returns {Promise<Object>} - 导入结果
+   */
+  async importUsers(organizationId, users) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // 检查组织是否存在
+      const organization = await Organization.findById(organizationId);
+      if (!organization) {
+        throw new Error('组织不存在');
+      }
+
+      // 获取默认成员角色
+      const memberRole = await Role.findOne({
+        organizationId,
+        name: '成员',
+        isSystem: true
+      });
+
+      if (!memberRole) {
+        throw new Error('默认成员角色不存在');
+      }
+
+      // 获取默认部门
+      const rootDepartment = await Department.findOne({
+        organizationId,
+        level: 0
+      });
+
+      if (!rootDepartment) {
+        throw new Error('默认部门不存在');
+      }
+
+      const results = {
+        success: 0,
+        failed: 0,
+        errors: []
+      };
+
+      // 处理每个用户
+      for (const userData of users) {
+        try {
+          // 检查用户是否已存在
+          let user = await User.findOne({ email: userData.email });
+          
+          // 如果用户不存在，创建新用户
+          if (!user) {
+            user = new User({
+              email: userData.email,
+              username: userData.username || userData.email.split('@')[0],
+              fullName: userData.fullName || '',
+              password: userData.password || Math.random().toString(36).slice(-8),
+              isActive: true
+            });
+            await user.save({ session });
+          }
+
+          // 检查用户是否已在组织中
+          const existingUserOrg = await UserOrganization.findOne({
+            userId: user._id,
+            organizationId
+          });
+
+          if (existingUserOrg) {
+            results.failed++;
+            results.errors.push({
+              email: userData.email,
+              error: '用户已在组织中'
+            });
+            continue;
+          }
+
+          // 创建用户组织关系
+          const userOrg = new UserOrganization({
+            userId: user._id,
+            organizationId,
+            departmentId: userData.departmentId || rootDepartment._id,
+            roleIds: userData.roleIds || [memberRole._id],
+            position: userData.position || '成员',
+            isAdmin: userData.isAdmin || false,
+            joinedAt: new Date(),
+            status: 'active'
+          });
+
+          await userOrg.save({ session });
+          results.success++;
+        } catch (error) {
+          results.failed++;
+          results.errors.push({
+            email: userData.email,
+            error: error.message
+          });
+        }
+      }
+
+      await session.commitTransaction();
+      return results;
+    } catch (error) {
+      await session.abortTransaction();
+      logger.error(`批量导入用户失败: ${error.message}`, { organizationId });
+      throw new Error(`批量导入用户失败: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  /**
+   * 获取组织的用户列表
+   * @param {string} organizationId - 组织ID
+   * @param {Object} filters - 过滤条件
+   * @returns {Promise<Array>} - 用户列表
+   */
+  async getOrganizationUsers(organizationId, filters = {}) {
+    try {
+      // 构建查询条件
+      const query = { organizationId };
+      
+      if (filters.departmentId) {
+        query.departmentId = filters.departmentId;
+      }
+      
+      if (filters.roleId) {
+        query.roleIds = filters.roleId;
+      }
+      
+      if (filters.status) {
+        query.status = filters.status;
+      }
+
+      // 查询用户组织关系
+      const userOrgs = await UserOrganization.find(query);
+      
+      // 获取用户ID列表
+      const userIds = userOrgs.map(userOrg => userOrg.userId);
+      
+      // 查询用户详情
+      const users = await User.find({ _id: { $in: userIds } });
+      
+      // 构建用户映射
+      const userMap = {};
+      users.forEach(user => {
+        userMap[user._id.toString()] = user;
+      });
+      
+      // 获取部门映射
+      const departments = await Department.find({ organizationId });
+      const departmentMap = {};
+      departments.forEach(dept => {
+        departmentMap[dept._id.toString()] = dept;
+      });
+      
+      // 获取角色映射
+      const roles = await Role.find({ organizationId });
+      const roleMap = {};
+      roles.forEach(role => {
+        roleMap[role._id.toString()] = role;
+      });
+      
+      // 构建结果
+      return userOrgs.map(userOrg => {
+        const user = userMap[userOrg.userId.toString()];
+        const department = departmentMap[userOrg.departmentId.toString()];
+        const userRoles = userOrg.roleIds.map(roleId => roleMap[roleId.toString()]).filter(Boolean);
+        
+        return {
+          userId: user._id,
+          email: user.email,
+          username: user.username,
+          fullName: user.fullName,
+          department: department ? {
+            id: department._id,
+            name: department.name
+          } : null,
+          roles: userRoles.map(role => ({
+            id: role._id,
+            name: role.name
+          })),
+          position: userOrg.position,
+          isAdmin: userOrg.isAdmin,
+          joinedAt: userOrg.joinedAt,
+          status: userOrg.status
+        };
+      });
+    } catch (error) {
+      logger.error(`获取组织用户列表失败: ${error.message}`, { organizationId });
+      throw new Error(`获取组织用户列表失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 更新用户在组织中的信息
    * @param {string} organizationId - 组织ID
    * @param {string} userId - 用户ID
-   * @param {string} positionId - 职位ID
-   * @param {string} assignerId - 分配者ID
-   * @returns {Promise<Object>} 分配结果
+   * @param {Object} updateData - 更新数据
+   * @returns {Promise<Object>} - 更新后的用户组织关系
    */
-  async assignPositionToUser(organizationId, userId, positionId, assignerId) {
+  async updateOrganizationUser(organizationId, userId, updateData) {
     try {
-      const organization = await Organization.findById(organizationId);
-      if (!organization) {
-        throw new Error(`组织不存在: ${organizationId}`);
+      // 查找用户组织关系
+      const userOrg = await UserOrganization.findOne({
+        organizationId,
+        userId
+      });
+
+      if (!userOrg) {
+        throw new Error('用户不在组织中');
       }
 
-      const user = await User.findById(userId);
-      if (!user) {
-        throw new Error(`用户不存在: ${userId}`);
-      }
-
-      const position = await Position.findById(positionId);
-      if (!position || position.organizationId.toString() !== organizationId) {
-        throw new Error(`职位不存在或不属于该组织: ${positionId}`);
-      }
-
-      // 检查权限（组织管理员或部门经理）
-      // 这里简化为组织管理员权限
-      await this.checkAdminPermission(organization, assignerId);
-
-      // 更新用户的职位信息
-      user.position = positionId;
-      await user.save();
-
-      logger.info(`职位 ${positionId} 已分配给用户 ${userId}`);
-      return { success: true, userId, positionId };
-    } catch (error) {
-      logger.error(`分配职位给用户失败: ${error.message}`);
-      throw new Error(`分配职位给用户失败: ${error.message}`);
-    }
-  }
-
-  /**
-   * 获取组织架构树
-   * @param {string} organizationId - 组织ID
-   * @returns {Promise<Object>} 组织架构树
-   */
-  async getOrganizationTree(organizationId) {
-    try {
-      const organization = await Organization.findById(organizationId);
-      if (!organization) {
-        throw new Error(`组织不存在: ${organizationId}`);
-      }
-
-      // 获取所有部门
-      const departments = await Department.find({ organizationId }).lean(); // 使用 lean() 提高性能
-      if (!departments || departments.length === 0) {
-        return { id: organization._id, name: organization.name, children: [] };
-      }
-
-      // 构建部门映射表
-      const departmentMap = departments.reduce((map, dept) => {
-        map[dept._id.toString()] = { ...dept, children: [] };
-        return map;
-      }, {});
-
-      // 构建树结构
-      let root = null;
-      departments.forEach(dept => {
-        const deptNode = departmentMap[dept._id.toString()];
-        if (dept.parentId) {
-          const parentNode = departmentMap[dept.parentId.toString()];
-          if (parentNode) {
-            parentNode.children.push(deptNode);
-          } else {
-            // 如果父节点未找到（数据不一致），将其视为顶级节点
-            if (!root) root = { id: organization._id, name: organization.name, children: [] };
-            root.children.push(deptNode);
-            logger.warn(`部门 ${dept._id} 的父部门 ${dept.parentId} 未找到`);
-          }
-        } else {
-          // 根部门或顶级部门
-          if (!root) root = { id: organization._id, name: organization.name, children: [] };
-          root.children.push(deptNode);
+      // 更新字段
+      const allowedFields = ['departmentId', 'roleIds', 'position', 'isAdmin', 'status'];
+      
+      allowedFields.forEach(field => {
+        if (updateData[field] !== undefined) {
+          userOrg[field] = updateData[field];
         }
       });
 
-      // 如果没有找到根部门，创建一个虚拟根节点
-      if (!root) {
-          root = { id: organization._id, name: organization.name, children: Object.values(departmentMap).filter(d => !d.parentId) };
-      }
-
-      // 可选：填充部门成员信息
-      // await this.populateDepartmentMembers(root);
-
-      return root;
+      // 保存更新
+      return await userOrg.save();
     } catch (error) {
-      logger.error(`获取组织架构树失败: ${error.message}`);
-      throw new Error(`获取组织架构树失败: ${error.message}`);
-    }
-  }
-
-  // --- 权限检查辅助函数 ---
-
-  /**
-   * 检查用户是否为组织管理员
-   * @param {Object} organization - 组织对象
-   * @param {string} userId - 用户ID
-   */
-  async checkAdminPermission(organization, userId) {
-    if (!organization.admins || !organization.admins.map(id => id.toString()).includes(userId.toString())) {
-      // 进一步检查用户是否具有全局管理员角色
-      const user = await User.findById(userId);
-      if (!user || !user.roles || !user.roles.includes("admin")) { // 假设全局管理员角色名为 'admin'
-          throw new Error(`用户 ${userId} 没有足够的管理员权限`);
-      }
+      logger.error(`更新组织用户失败: ${error.message}`, { organizationId, userId });
+      throw new Error(`更新组织用户失败: ${error.message}`);
     }
   }
 
   /**
-   * 检查用户是否为部门经理或组织管理员
-   * @param {Object} department - 部门对象
-   * @param {string} userId - 用户ID
-   */
-  async checkDepartmentManagerPermission(department, userId) {
-    let hasPermission = false;
-    // 检查是否为部门经理
-    if (department.manager && department.manager.toString() === userId.toString()) {
-      hasPermission = true;
-    }
-    // 检查是否为组织管理员
-    if (!hasPermission) {
-      const organization = await Organization.findById(department.organizationId);
-      if (organization && organization.admins && organization.admins.map(id => id.toString()).includes(userId.toString())) {
-        hasPermission = true;
-      }
-    }
-    // 检查是否为全局管理员
-    if (!hasPermission) {
-        const user = await User.findById(userId);
-        if (user && user.roles && user.roles.includes("admin")) {
-            hasPermission = true;
-        }
-    }
-
-    if (!hasPermission) {
-      throw new Error(`用户 ${userId} 没有足够的部门管理权限`);
-    }
-  }
-
-  // --- 其他辅助函数 ---
-
-  /**
-   * 批量导入用户到组织/部门
+   * 从组织中移除用户
    * @param {string} organizationId - 组织ID
-   * @param {Array<Object>} usersData - 用户数据列表
-   * @param {string} importerId - 导入者ID
-   * @returns {Promise<Object>} 导入结果
+   * @param {string} userId - 用户ID
+   * @returns {Promise<boolean>} - 移除结果
    */
-  async bulkImportUsers(organizationId, usersData, importerId) {
-    // 实现批量用户创建、分配部门、角色、职位的逻辑
-    // 需要处理错误、验证数据、权限检查等
-    logger.info(`开始批量导入用户到组织 ${organizationId}`);
-    const results = { total: usersData.length, successful: 0, failed: 0, errors: [] };
-
+  async removeUserFromOrganization(organizationId, userId) {
     try {
-        const organization = await Organization.findById(organizationId);
-        if (!organization) throw new Error(`组织不存在: ${organizationId}`);
-        await this.checkAdminPermission(organization, importerId);
+      // 查找用户组织关系
+      const userOrg = await UserOrganization.findOne({
+        organizationId,
+        userId
+      });
 
-        for (const userData of usersData) {
-            try {
-                // 1. 查找或创建用户
-                let user = await User.findOne({ email: userData.email });
-                if (!user) {
-                    // 创建新用户逻辑，需要密码处理等
-                    // user = new User({...userData, organizationId});
-                    // await user.save();
-                    throw new Error(`用户 ${userData.email} 不存在，请先创建用户`); // 简化处理，假设用户已存在
-                }
+      if (!userOrg) {
+        throw new Error('用户不在组织中');
+      }
 
-                // 2. 分配部门
-                if (userData.departmentName) {
-                    const department = await Department.findOne({ organizationId, name: userData.departmentName });
-                    if (department) {
-                        await this.addUserToDepartment(department._id, user._id, importerId);
-                    } else {
-                        throw new Error(`部门 ${userData.departmentName} 不存在`);
-                    }
-                }
-
-                // 3. 分配角色
-                if (userData.roleName) {
-                    const role = await Role.findOne({ organizationId, name: userData.roleName });
-                    if (role) {
-                        await this.assignRoleToUser(organizationId, user._id, role._id, importerId);
-                    } else {
-                        throw new Error(`角色 ${userData.roleName} 不存在`);
-                    }
-                }
-
-                // 4. 分配职位
-                if (userData.positionTitle) {
-                    const position = await Position.findOne({ organizationId, title: userData.positionTitle });
-                    if (position) {
-                        await this.assignPositionToUser(organizationId, user._id, position._id, importerId);
-                    } else {
-                        throw new Error(`职位 ${userData.positionTitle} 不存在`);
-                    }
-                }
-                results.successful++;
-            } catch (userError) {
-                results.failed++;
-                results.errors.push({ email: userData.email, error: userError.message });
-            }
-        }
+      // 删除用户组织关系
+      await UserOrganization.findByIdAndDelete(userOrg._id);
+      return true;
     } catch (error) {
-        logger.error(`批量导入用户失败: ${error.message}`);
-        throw error; // 抛出外层错误
+      logger.error(`从组织移除用户失败: ${error.message}`, { organizationId, userId });
+      throw new Error(`从组织移除用户失败: ${error.message}`);
     }
-    logger.info(`批量导入用户完成: 成功 ${results.successful}, 失败 ${results.failed}`);
-    return results;
-  }
-
-  /**
-   * 获取组织关系可视化数据
-   * @param {string} organizationId - 组织ID
-   * @returns {Promise<Object>} 可视化数据
-   */
-  async getOrganizationVisualizationData(organizationId) {
-    // 实现获取用于前端可视化的组织架构数据（如节点和边）
-    // 可以复用 getOrganizationTree 的逻辑，并转换为特定格式
-    const tree = await this.getOrganizationTree(organizationId);
-    // 转换 tree 为 D3.js 或其他库所需的格式
-    const nodes = [];
-    const links = [];
-    function traverse(node, parentId) {
-        const nodeId = node._id ? node._id.toString() : node.id.toString(); // 处理根节点和部门节点ID不一致问题
-        nodes.push({ id: nodeId, name: node.name, type: node._id ? 'department' : 'organization' }); // 区分组织和部门节点
-        if (parentId) {
-            links.push({ source: parentId, target: nodeId });
-        }
-        if (node.children && node.children.length > 0) {
-            node.children.forEach(child => traverse(child, nodeId));
-        }
-    }
-    traverse(tree, null);
-    return { nodes, links };
   }
 }
 
-// 创建企业组织架构管理器实例
-const organizationManager = new OrganizationManager();
-
-// 导出模块
-module.exports = {
-  organizationManager,
-  ORGANIZATION_MANAGER_CONFIG,
-};
+module.exports = new OrganizationManager();
