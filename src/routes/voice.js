@@ -1,39 +1,24 @@
 const express = require('express');
-const {
-    speechToText,
-    textToSpeech,
-    voiceTranslation,
-    sendVoiceMessage,
-    getMessageAudio,
-    getSupportedLanguages,
-    realtimeTranslate,
-    deleteVoiceFile,
-    getVoiceFileInfo
-} = require('../controllers/voiceController');
-
+const voiceController = require('../controllers/voiceController');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
 // 公开路由
-router.get('/languages', getSupportedLanguages);
+router.get('/languages', voiceController.getSupportedLanguages);
 
 // 需要认证的路由
 router.use(protect);
 
-// 语音处理路由
-router.post('/speech-to-text', speechToText);
-router.post('/text-to-speech', textToSpeech);
-router.post('/translate', voiceTranslation);
-router.post('/realtime-translate', realtimeTranslate);
+// 语音翻译路由
+router.post('/translate', voiceController.upload.single('audio'), voiceController.translateVoice);
+router.post('/transcribe', voiceController.upload.single('audio'), voiceController.transcribeVoice);
+router.post('/synthesize', voiceController.synthesizeVoice);
 
-// 聊天相关语音路由
-router.post('/chat/:roomId', sendVoiceMessage);
-router.post('/message/:messageId/audio', getMessageAudio);
-
-// 文件管理路由
-router.delete('/file/:filename', deleteVoiceFile);
-router.get('/file/:filename/info', getVoiceFileInfo);
+// 语音翻译历史和管理
+router.get('/history', voiceController.getVoiceHistory);
+router.delete('/translation/:id', voiceController.deleteVoiceTranslation);
+router.get('/translation/:id/status', voiceController.getTranslationStatus);
 
 module.exports = router;
 

@@ -33,6 +33,7 @@ const messages = require('./routes/messages');
 const blockchain = require('./routes/blockchain');
 const chat = require('./routes/chat');
 const voice = require('./routes/voice');
+const tokens = require('./routes/tokens');
 
 // 导入服务
 const SocketService = require('./services/socketService');
@@ -87,6 +88,7 @@ app.get('/', (req, res) => {
       blockchain: '/api/v1/blockchain',
       chat: '/api/v1/chat',
       voice: '/api/v1/voice',
+      tokens: '/api/v1/tokens',
       profiles: '/api/v1/profiles',
       topics: '/api/v1/topics',
       posts: '/api/v1/posts',
@@ -114,6 +116,7 @@ app.use('/api/v1/auth', auth);
 app.use('/api/v1/blockchain', blockchain);
 app.use('/api/v1/chat', chat);
 app.use('/api/v1/voice', voice);
+app.use('/api/v1/tokens', tokens);
 app.use('/api/v1/profiles', advancedResults(Profile, { path: 'user', select: 'username email' }), profiles);
 app.use('/api/v1/topics', advancedResults(Topic, { path: 'user', select: 'username' }), topics);
 app.use('/api/v1/posts', advancedResults(Post, [
