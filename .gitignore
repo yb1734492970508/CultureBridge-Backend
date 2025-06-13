@@ -2,3 +2,10 @@ node_modules/
 .cache/
 package-lock.json
 *.log
+.env
+.env.local
+.env.production
+logs/
+uploads/
+temp/
+config/google-cloud-key.json
