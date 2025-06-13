@@ -323,6 +323,9 @@ app.use('/api/v1/events', advancedResults(Event, { path: 'organizer', select: 'u
 app.use('/api/v1/communities', advancedResults(Community, { path: 'creator', select: 'username' }), communities);
 app.use('/api/v1/messages', messages);
 
+// 交易所集成路由
+app.use('/api/exchange', require('./routes/exchangeIntegration'));
+
 // 管理员路由
 app.use('/api/admin', require('./routes/admin'));
 

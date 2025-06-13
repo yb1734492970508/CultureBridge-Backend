@@ -14,6 +14,15 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
     
     CultureBridgeIdentity private identityContract;
     
+    constructor(
+        string memory name,
+        string memory symbol,
+        address initialOwner
+    ) ERC721(name, symbol) Ownable(initialOwner) {
+        // 构造函数逻辑
+        // identityContract 需要在部署后单独设置
+    }
+    
     struct CulturalAsset {
         uint256 id;
         string assetType; // 文章、视频、音频、艺术品等
@@ -39,14 +48,6 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
     event AssetCreated(uint256 indexed tokenId, address indexed creator, string assetType, string culturalOrigin);
     event AssetVerified(uint256 indexed tokenId);
     event AssetMetadataUpdated(uint256 indexed tokenId, string newMetadataHash);
-    
-    /**
-     * @dev 构造函数
-     * @param _identityContractAddress 身份合约地址
-     */
-    constructor(address _identityContractAddress) ERC721("CultureBridge Asset", "CBA") {
-        identityContract = CultureBridgeIdentity(_identityContractAddress);
-    }
     
     /**
      * @dev 检查token是否存在

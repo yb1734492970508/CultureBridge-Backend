@@ -15,10 +15,6 @@ contract CultureBridgeExchange is Ownable {
     CultureBridgeIdentity private identityContract;
     CultureBridgeAsset private assetContract;
     
-    constructor(address initialOwner) Ownable(initialOwner) {
-        // 构造函数逻辑
-    }
-    
     struct CulturalExchange {
         uint256 id;
         string title;
@@ -53,10 +49,15 @@ contract CultureBridgeExchange is Ownable {
     
     /**
      * @dev 构造函数
+     * @param initialOwner 初始所有者地址
      * @param _identityContractAddress 身份合约地址
      * @param _assetContractAddress 资产合约地址
      */
-    constructor(address _identityContractAddress, address _assetContractAddress) {
+    constructor(
+        address initialOwner,
+        address _identityContractAddress, 
+        address _assetContractAddress
+    ) Ownable(initialOwner) {
         identityContract = CultureBridgeIdentity(_identityContractAddress);
         assetContract = CultureBridgeAsset(_assetContractAddress);
     }

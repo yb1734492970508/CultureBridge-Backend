@@ -17,10 +17,6 @@ contract CultureBridgeFactory is Ownable {
     CultureBridgeExchange public exchangeContract;
     CultureBridgeToken public tokenContract;
     
-    constructor(address initialOwner) Ownable(initialOwner) {
-        // 构造函数逻辑
-    }
-    
     event ContractsDeployed(
         address identityContract,
         address assetContract,
@@ -31,24 +27,25 @@ contract CultureBridgeFactory is Ownable {
     /**
      * @dev 构造函数，部署所有合约
      */
-    constructor() {
+    constructor(address initialOwner) Ownable(initialOwner) {
         // 部署身份合约
-        identityContract = new CultureBridgeIdentity();
+        identityContract = new CultureBridgeIdentity(initialOwner);
         
         // 部署资产合约
-        assetContract = new CultureBridgeAsset(address(identityContract));
+        assetContract = new CultureBridgeAsset("CultureBridge Asset", "CBA", initialOwner);
         
         // 部署交流合约
-        exchangeContract = new CultureBridgeExchange(address(identityContract), address(assetContract));
+        exchangeContract = new CultureBridgeExchange(initialOwner, address(identityContract), address(assetContract));
         
-        // 部署代币合约
-        tokenContract = new CultureBridgeToken(address(identityContract));
+        // 部署代币合约 - 使用代理模式，这里只是占位符
+        // tokenContract = new CultureBridgeToken();
+        // tokenContract.initialize("CultureBridge Token", "CBT", initialOwner);
         
         emit ContractsDeployed(
             address(identityContract),
             address(assetContract),
             address(exchangeContract),
-            address(tokenContract)
+            address(0) // tokenContract 暂时为空
         );
     }
     
@@ -61,7 +58,7 @@ contract CultureBridgeFactory is Ownable {
         identityContract.transferOwnership(_newOwner);
         assetContract.transferOwnership(_newOwner);
         exchangeContract.transferOwnership(_newOwner);
-        tokenContract.transferOwnership(_newOwner);
+        // tokenContract 是可升级合约，使用 AccessControl 管理权限
     }
     
     /**
