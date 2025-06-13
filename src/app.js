@@ -1,3 +1,13 @@
+/**
+ * CultureBridge Backend Application
+ * 文化桥梁后端应用程序
+ * 
+ * @author Bin Yi <binyi@culturebridge.com>
+ * @version 2.1.0
+ * @description 基于区块链的跨文化交流平台后端服务
+ *              Blockchain-based cross-cultural communication platform backend service
+ */
+
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');

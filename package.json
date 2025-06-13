@@ -1,20 +1,37 @@
 {
   "name": "culturebridge-backend",
-  "version": "1.0.0",
-  "description": "CultureBridge跨文化交流平台的后端代码",
-  "main": "src/app.js",
+  "version": "2.1.0",
+  "description": "CultureBridge跨文化交流平台的后端代码 / CultureBridge Cross-Cultural Communication Platform Backend",
+  "main": "src/optimizedApp.js",
   "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
-    "test": "jest"
+    "start": "node src/optimizedApp.js",
+    "dev": "nodemon src/optimizedApp.js",
+    "test": "jest",
+    "security-audit": "npm audit",
+    "lint": "eslint src/",
+    "build": "npm run test && npm run security-audit"
   },
   "keywords": [
     "culture",
     "exchange",
     "backend",
-    "api"
+    "api",
+    "blockchain",
+    "voice-translation",
+    "real-time-chat",
+    "CBT-token",
+    "BNB-chain",
+    "multilingual",
+    "i18n"
   ],
-  "author": "",
+  "author": "Bin Yi <binyi@culturebridge.com>",
+  "contributors": [
+    {
+      "name": "Bin Yi",
+      "email": "binyi@culturebridge.com",
+      "role": "Lead Developer"
+    }
+  ],
   "license": "MIT",
   "dependencies": {
     "@binance-chain/bsc-connector": "^1.0.0",
