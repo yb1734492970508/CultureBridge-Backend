@@ -11,6 +11,24 @@ const { securityMiddleware } = require('./middleware/security');
 // 加载环境变量
 dotenv.config();
 
+// 配置BigInt序列化支持
+BigInt.prototype.toJSON = function() {
+    return this.toString();
+};
+
+// 全局错误处理
+process.on('unhandledRejection', (err, promise) => {
+    console.log('❌ 未处理的Promise拒绝:', err.message);
+    console.log('🔄 服务器已关闭，正在退出进程...');
+    process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+    console.log('❌ 未捕获的异常:', err.message);
+    console.log('🔄 服务器已关闭，正在退出进程...');
+    process.exit(1);
+});
+
 // 导入模型
 const User = require('./models/User');
 const Profile = require('./models/Profile');

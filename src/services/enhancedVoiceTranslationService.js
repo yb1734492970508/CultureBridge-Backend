@@ -45,11 +45,10 @@ class EnhancedVoiceTranslationService {
         this.tempDir = path.join(process.cwd(), 'temp', 'audio');
         this.ensureTempDirectory();
     }
-    
     /**
      * 初始化Google Cloud服务
      */
-    initializeGoogleCloudServices() {
+    async initializeGoogleCloudServices() {
         try {
             const keyFilename = process.env.GOOGLE_CLOUD_KEY_FILE;
             const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
@@ -59,21 +58,13 @@ class EnhancedVoiceTranslationService {
                 return;
             }
             
-            const config = {
-                projectId,
-                keyFilename
-            };
+            // 暂时跳过Google Cloud初始化，避免阻止应用启动
+            console.log('⚠️ Google Cloud服务暂时跳过初始化');
             
-            this.speechClient = new speech.SpeechClient(config);
-            this.ttsClient = new textToSpeech.TextToSpeechClient(config);
-            this.translateClient = new translate.Translate(config);
-            
-            console.log('✅ Google Cloud语音服务已初始化');
         } catch (error) {
             console.error('❌ Google Cloud服务初始化失败:', error);
         }
-    }
-    
+    }    
     /**
      * 确保临时目录存在
      */

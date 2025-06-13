@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Counters.sol";
 
 /**
  * @title CultureBridgeIdentity
  * @dev 管理用户身份和权限的智能合约
  */
 contract CultureBridgeIdentity is Ownable {
-    using Counters for Counters.Counter;
-    Counters.Counter private _userIds;
+    uint256 private _userIdCounter;
     
     struct User {
         uint256 id;
@@ -37,8 +35,8 @@ contract CultureBridgeIdentity is Ownable {
         require(users[msg.sender].id == 0, "User already registered");
         require(usernameToAddress[_username] == address(0), "Username already taken");
         
-        _userIds.increment();
-        uint256 newUserId = _userIds.current();
+        _userIdCounter++;
+        uint256 newUserId = _userIdCounter;
         
         User storage newUser = users[msg.sender];
         newUser.id = newUserId;

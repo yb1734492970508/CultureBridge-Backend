@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Counters.sol";
 import "./CultureBridgeIdentity.sol";
 import "./CultureBridgeAsset.sol";
 
@@ -11,8 +10,7 @@ import "./CultureBridgeAsset.sol";
  * @dev 管理文化交流活动和互动的智能合约
  */
 contract CultureBridgeExchange is Ownable {
-    using Counters for Counters.Counter;
-    Counters.Counter private _exchangeIds;
+    uint256 private _exchangeIdCounter;
     
     CultureBridgeIdentity private identityContract;
     CultureBridgeAsset private assetContract;
@@ -85,8 +83,8 @@ contract CultureBridgeExchange is Ownable {
         require(_startTime >= block.timestamp, "Start time must be in the future");
         require(_endTime > _startTime, "End time must be after start time");
         
-        _exchangeIds.increment();
-        uint256 newExchangeId = _exchangeIds.current();
+        _exchangeIdCounter++;
+        uint256 newExchangeId = _exchangeIdCounter;
         
         exchanges[newExchangeId].id = newExchangeId;
         exchanges[newExchangeId].title = _title;
@@ -353,7 +351,7 @@ contract CultureBridgeExchange is Ownable {
      * @return 交流ID数组
      */
     function getActiveExchanges() public view returns (uint256[] memory) {
-        uint256 totalExchanges = _exchangeIds.current();
+        uint256 totalExchanges = _exchangeIdCounter;
         uint256 activeCount = 0;
         
         // 计算活跃交流的数量
@@ -410,6 +408,6 @@ contract CultureBridgeExchange is Ownable {
      * @return 交流总数
      */
     function getTotalExchanges() public view returns (uint256) {
-        return _exchangeIds.current();
+        return _exchangeIdCounter;
     }
 }

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Counters.sol";
 import "./CultureBridgeIdentity.sol";
 
 /**
@@ -11,8 +10,7 @@ import "./CultureBridgeIdentity.sol";
  * @dev 管理文化资源数字资产化的智能合约
  */
 contract CultureBridgeAsset is ERC721URIStorage, Ownable {
-    using Counters for Counters.Counter;
-    Counters.Counter private _tokenIds;
+    uint256 private _tokenIdCounter;
     
     CultureBridgeIdentity private identityContract;
     
@@ -51,6 +49,15 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
     }
     
     /**
+     * @dev 检查token是否存在
+     * @param tokenId 代币ID
+     * @return 是否存在
+     */
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return _ownerOf(tokenId) != address(0);
+    }
+    
+    /**
      * @dev 创建新的文化资产
      * @param _assetType 资产类型
      * @param _culturalOrigin 文化起源
@@ -69,8 +76,8 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
         require(userId != 0, "User not registered");
         require(isVerified, "User must be verified to create assets");
         
-        _tokenIds.increment();
-        uint256 newItemId = _tokenIds.current();
+        _tokenIdCounter++;
+        uint256 newItemId = _tokenIdCounter;
         
         _mint(msg.sender, newItemId);
         _setTokenURI(newItemId, _tokenURI);
@@ -192,7 +199,7 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
      * @return 资产ID数组
      */
     function getVerifiedAssets(uint256 _startIndex, uint256 _count) public view returns (uint256[] memory) {
-        uint256 totalAssets = _tokenIds.current();
+        uint256 totalAssets = _tokenIdCounter;
         require(_startIndex < totalAssets, "Start index out of bounds");
         
         uint256 endIndex = _startIndex + _count;
@@ -225,7 +232,7 @@ contract CultureBridgeAsset is ERC721URIStorage, Ownable {
      * @return 资产总数
      */
     function getTotalAssets() public view returns (uint256) {
-        return _tokenIds.current();
+        return _tokenIdCounter;
     }
     
     /**
