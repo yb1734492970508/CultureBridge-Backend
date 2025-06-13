@@ -17,6 +17,10 @@ contract CultureBridgeFactory is Ownable {
     CultureBridgeExchange public exchangeContract;
     CultureBridgeToken public tokenContract;
     
+    constructor(address initialOwner) Ownable(initialOwner) {
+        // 构造函数逻辑
+    }
+    
     event ContractsDeployed(
         address identityContract,
         address assetContract,

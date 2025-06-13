@@ -51,9 +51,8 @@ contract CultureBridgeToken is
         address from;
         address to;
         uint256 amount;
-        string purpose;
         TransactionCategory category;
-        string[] tags;
+        string description;
         uint256 timestamp;
         bool isReward;
     }
@@ -62,57 +61,27 @@ contract CultureBridgeToken is
     struct UserStats {
         uint256 totalEarned;
         uint256 totalSpent;
-        uint256 totalTransactions;
+        uint256 transactionCount;
         uint256 lastActivityTime;
-        mapping(TransactionCategory => uint256) categoryStats;
-    }
-
-    // 奖励配置结构
-    struct RewardConfig {
-        uint256 dailyLearningReward;
-        uint256 contentCreationReward;
-        uint256 culturalExchangeReward;
-        uint256 communityContributionReward;
-        uint256 referralReward;
-        bool isActive;
+        mapping(TransactionCategory => uint256) categoryEarnings;
     }
 
     // 状态变量
-    uint256 private _transactionCounter;
-    mapping(uint256 => CulturalTransaction) public transactions;
-    mapping(address => uint256[]) public userTransactions;
     mapping(address => UserStats) public userStats;
-    mapping(address => bool) public verifiedUsers;
-    mapping(address => uint256) public lastRewardTime;
-    
-    RewardConfig public rewardConfig;
+    mapping(uint256 => CulturalTransaction) public transactions;
+    uint256 public transactionCounter;
     uint256 public totalRewardsDistributed;
-    uint256 public burnedTokens;
     
-    // 每日奖励限制
-    mapping(address => mapping(uint256 => uint256)) public dailyRewards; // user => day => amount
-    uint256 public constant MAX_DAILY_REWARD = 100 * 10**18; // 每日最大奖励100 CBT
-
+    // 奖励配置
+    mapping(TransactionCategory => uint256) public rewardRates;
+    mapping(address => uint256) public dailyRewardClaimed;
+    mapping(address => uint256) public lastClaimTime;
+    
     // 事件定义
-    event CulturalTransactionCreated(
-        uint256 indexed transactionId,
-        address indexed from,
-        address indexed to,
-        uint256 amount,
-        string purpose,
-        TransactionCategory category
-    );
-    
-    event RewardDistributed(
-        address indexed recipient,
-        uint256 amount,
-        string reason,
-        TransactionCategory category
-    );
-    
-    event UserVerified(address indexed user, uint256 timestamp);
-    event RewardConfigUpdated(RewardConfig newConfig);
-    event TokensBurned(address indexed burner, uint256 amount);
+    event RewardDistributed(address indexed recipient, uint256 amount, TransactionCategory category, string description);
+    event CulturalTransactionRecorded(uint256 indexed transactionId, address indexed from, address indexed to, uint256 amount, TransactionCategory category);
+    event RewardRateUpdated(TransactionCategory category, uint256 oldRate, uint256 newRate);
+    event UserStatsUpdated(address indexed user, uint256 totalEarned, uint256 totalSpent);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -122,8 +91,12 @@ contract CultureBridgeToken is
     /**
      * @dev 初始化合约
      */
-    function initialize(address admin) public initializer {
-        __ERC20_init("CultureBridge Token", "CBT");
+    function initialize(
+        string memory name,
+        string memory symbol,
+        address admin
+    ) public initializer {
+        __ERC20_init(name, symbol);
         __ERC20Burnable_init();
         __ERC20Pausable_init();
         __AccessControl_init();
@@ -138,103 +111,33 @@ contract CultureBridgeToken is
         _grantRole(UPGRADER_ROLE, admin);
         _grantRole(REWARD_DISTRIBUTOR_ROLE, admin);
 
+        // 初始化奖励费率
+        _initializeRewardRates();
+
         // 铸造初始供应量
         _mint(admin, INITIAL_SUPPLY);
-
-        // 初始化奖励配置
-        rewardConfig = RewardConfig({
-            dailyLearningReward: 5 * 10**18,
-            contentCreationReward: 10 * 10**18,
-            culturalExchangeReward: 3 * 10**18,
-            communityContributionReward: 2 * 10**18,
-            referralReward: 5 * 10**18,
-            isActive: true
-        });
     }
 
     /**
-     * @dev 带目的的代币转账
+     * @dev 初始化奖励费率
      */
-    function transferWithPurpose(
-        address to,
-        uint256 amount,
-        string memory purpose,
-        TransactionCategory category,
-        string[] memory tags
-    ) public nonReentrant returns (uint256) {
-        require(to != address(0), "CBT: transfer to zero address");
-        require(amount > 0, "CBT: amount must be greater than 0");
-        require(bytes(purpose).length > 0, "CBT: purpose cannot be empty");
-
-        // 执行转账
-        _transfer(_msgSender(), to, amount);
-
-        // 记录文化交流交易
-        uint256 transactionId = _createCulturalTransaction(
-            _msgSender(),
-            to,
-            amount,
-            purpose,
-            category,
-            tags,
-            false
-        );
-
-        // 更新用户统计
-        _updateUserStats(_msgSender(), amount, true, category);
-        _updateUserStats(to, amount, false, category);
-
-        return transactionId;
+    function _initializeRewardRates() internal {
+        rewardRates[TransactionCategory.LEARNING_REWARD] = 2 * 10**18; // 2 CBT
+        rewardRates[TransactionCategory.CULTURAL_EXCHANGE] = 3 * 10**18; // 3 CBT
+        rewardRates[TransactionCategory.CONTENT_CREATION] = 5 * 10**18; // 5 CBT
+        rewardRates[TransactionCategory.COMMUNITY_CONTRIBUTION] = 1 * 10**18; // 1 CBT
+        rewardRates[TransactionCategory.GOVERNANCE_PARTICIPATION] = 10 * 10**18; // 10 CBT
     }
 
     /**
-     * @dev 分发奖励代币
+     * @dev 分发奖励
      */
     function distributeReward(
         address recipient,
-        uint256 amount,
-        string memory reason,
-        TransactionCategory category
-    ) public onlyRole(REWARD_DISTRIBUTOR_ROLE) nonReentrant {
-        require(recipient != address(0), "CBT: reward to zero address");
-        require(amount > 0, "CBT: reward amount must be greater than 0");
-        require(rewardConfig.isActive, "CBT: rewards are not active");
-
-        // 检查每日奖励限制
-        uint256 today = block.timestamp / 86400; // 当前天数
-        require(
-            dailyRewards[recipient][today] + amount <= MAX_DAILY_REWARD,
-            "CBT: daily reward limit exceeded"
-        );
-
-        // 检查供应量限制
-        require(
-            totalSupply() + amount <= MAX_SUPPLY,
-            "CBT: would exceed max supply"
-        );
-
-        // 铸造奖励代币
-        _mint(recipient, amount);
-
-        // 更新每日奖励记录
-        dailyRewards[recipient][today] += amount;
-        totalRewardsDistributed += amount;
-
-        // 记录奖励交易
-        uint256 transactionId = _createCulturalTransaction(
-            address(0),
-            recipient,
-            amount,
-            reason,
-            category,
-            new string[](0),
-            true
-        );
-
-        // 更新用户统计
-        _updateUserStats(recipient, amount, false, category);
-
-        emit RewardDistributed(recipient, amount, reason, category);
+        TransactionCategory category,
+        string memory description
+    ) external onlyRole(REWARD_DISTRIBUTOR_ROLE) nonReentrant {
+        _distributeReward(recipient, category, description);
     }
 
     /**
@@ -242,182 +145,190 @@ contract CultureBridgeToken is
      */
     function batchDistributeRewards(
         address[] memory recipients,
-        uint256[] memory amounts,
-        string[] memory reasons,
-        TransactionCategory category
-    ) public onlyRole(REWARD_DISTRIBUTOR_ROLE) {
-        require(
-            recipients.length == amounts.length && amounts.length == reasons.length,
-            "CBT: arrays length mismatch"
-        );
-
+        TransactionCategory[] memory categories,
+        string[] memory descriptions
+    ) external onlyRole(REWARD_DISTRIBUTOR_ROLE) {
+        require(recipients.length == categories.length && categories.length == descriptions.length, "Array length mismatch");
+        
         for (uint256 i = 0; i < recipients.length; i++) {
-            distributeReward(recipients[i], amounts[i], reasons[i], category);
+            _distributeReward(recipients[i], categories[i], descriptions[i]);
         }
     }
 
     /**
-     * @dev 验证用户身份
+     * @dev 内部分发奖励函数
      */
-    function verifyUser(address user) public onlyRole(ADMIN_ROLE) {
-        require(!verifiedUsers[user], "CBT: user already verified");
-        verifiedUsers[user] = true;
-        emit UserVerified(user, block.timestamp);
+    function _distributeReward(
+        address recipient,
+        TransactionCategory category,
+        string memory description
+    ) internal {
+        require(recipient != address(0), "Invalid recipient");
+        
+        uint256 rewardAmount = rewardRates[category];
+        require(rewardAmount > 0, "Invalid reward category");
+        require(totalSupply() + rewardAmount <= MAX_SUPPLY, "Exceeds max supply");
+
+        // 铸造奖励代币
+        _mint(recipient, rewardAmount);
+
+        // 更新统计
+        _updateUserStats(recipient, rewardAmount, 0, category);
+        totalRewardsDistributed += rewardAmount;
+
+        // 记录交易
+        _recordTransaction(address(0), recipient, rewardAmount, category, description, true);
+
+        emit RewardDistributed(recipient, rewardAmount, category, description);
     }
 
     /**
-     * @dev 更新奖励配置
+     * @dev 每日登录奖励
      */
-    function updateRewardConfig(RewardConfig memory newConfig) public onlyRole(ADMIN_ROLE) {
-        rewardConfig = newConfig;
-        emit RewardConfigUpdated(newConfig);
+    function claimDailyReward() external nonReentrant {
+        require(block.timestamp >= lastClaimTime[msg.sender] + 1 days, "Already claimed today");
+        
+        uint256 dailyReward = 1 * 10**18; // 1 CBT
+        require(totalSupply() + dailyReward <= MAX_SUPPLY, "Exceeds max supply");
+
+        lastClaimTime[msg.sender] = block.timestamp;
+        dailyRewardClaimed[msg.sender] += dailyReward;
+
+        _mint(msg.sender, dailyReward);
+        _updateUserStats(msg.sender, dailyReward, 0, TransactionCategory.GENERAL);
+        totalRewardsDistributed += dailyReward;
+
+        emit RewardDistributed(msg.sender, dailyReward, TransactionCategory.GENERAL, "Daily login reward");
     }
 
     /**
-     * @dev 获取用户交易历史
+     * @dev 文化交流转账
      */
-    function getUserTransactions(address user) public view returns (uint256[] memory) {
-        return userTransactions[user];
+    function culturalTransfer(
+        address to,
+        uint256 amount,
+        TransactionCategory category,
+        string memory description
+    ) external nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        require(amount > 0, "Invalid amount");
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+
+        _transfer(msg.sender, to, amount);
+        
+        // 更新统计
+        _updateUserStats(msg.sender, 0, amount, category);
+        _updateUserStats(to, amount, 0, category);
+
+        // 记录交易
+        _recordTransaction(msg.sender, to, amount, category, description, false);
+
+        emit CulturalTransactionRecorded(transactionCounter - 1, msg.sender, to, amount, category);
+    }
+
+    /**
+     * @dev 更新用户统计
+     */
+    function _updateUserStats(
+        address user,
+        uint256 earned,
+        uint256 spent,
+        TransactionCategory category
+    ) internal {
+        UserStats storage stats = userStats[user];
+        stats.totalEarned += earned;
+        stats.totalSpent += spent;
+        stats.transactionCount += 1;
+        stats.lastActivityTime = block.timestamp;
+        stats.categoryEarnings[category] += earned;
+
+        emit UserStatsUpdated(user, stats.totalEarned, stats.totalSpent);
+    }
+
+    /**
+     * @dev 记录交易
+     */
+    function _recordTransaction(
+        address from,
+        address to,
+        uint256 amount,
+        TransactionCategory category,
+        string memory description,
+        bool isReward
+    ) internal {
+        transactionCounter++;
+        transactions[transactionCounter] = CulturalTransaction({
+            id: transactionCounter,
+            from: from,
+            to: to,
+            amount: amount,
+            category: category,
+            description: description,
+            timestamp: block.timestamp,
+            isReward: isReward
+        });
+    }
+
+    /**
+     * @dev 设置奖励费率
+     */
+    function setRewardRate(
+        TransactionCategory category,
+        uint256 newRate
+    ) external onlyRole(ADMIN_ROLE) {
+        uint256 oldRate = rewardRates[category];
+        rewardRates[category] = newRate;
+        emit RewardRateUpdated(category, oldRate, newRate);
+    }
+
+    /**
+     * @dev 获取用户类别收益
+     */
+    function getUserCategoryEarnings(
+        address user,
+        TransactionCategory category
+    ) external view returns (uint256) {
+        return userStats[user].categoryEarnings[category];
     }
 
     /**
      * @dev 获取交易详情
      */
-    function getTransaction(uint256 transactionId) public view returns (CulturalTransaction memory) {
-        require(transactionId <= _transactionCounter, "CBT: transaction does not exist");
+    function getTransaction(uint256 transactionId) external view returns (CulturalTransaction memory) {
         return transactions[transactionId];
-    }
-
-    /**
-     * @dev 获取用户统计信息
-     */
-    function getUserStats(address user) public view returns (
-        uint256 totalEarned,
-        uint256 totalSpent,
-        uint256 totalTransactions,
-        uint256 lastActivityTime
-    ) {
-        UserStats storage stats = userStats[user];
-        return (
-            stats.totalEarned,
-            stats.totalSpent,
-            stats.totalTransactions,
-            stats.lastActivityTime
-        );
-    }
-
-    /**
-     * @dev 获取用户分类统计
-     */
-    function getUserCategoryStats(address user, TransactionCategory category) public view returns (uint256) {
-        return userStats[user].categoryStats[category];
-    }
-
-    /**
-     * @dev 获取用户今日已获得奖励
-     */
-    function getTodayRewards(address user) public view returns (uint256) {
-        uint256 today = block.timestamp / 86400;
-        return dailyRewards[user][today];
-    }
-
-    /**
-     * @dev 销毁代币并记录
-     */
-    function burn(uint256 amount) public override {
-        super.burn(amount);
-        burnedTokens += amount;
-        emit TokensBurned(_msgSender(), amount);
     }
 
     /**
      * @dev 暂停合约
      */
-    function pause() public onlyRole(PAUSER_ROLE) {
+    function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
 
     /**
      * @dev 恢复合约
      */
-    function unpause() public onlyRole(PAUSER_ROLE) {
+    function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
     }
 
     /**
-     * @dev 创建文化交流交易记录
+     * @dev 铸造代币
      */
-    function _createCulturalTransaction(
-        address from,
-        address to,
-        uint256 amount,
-        string memory purpose,
-        TransactionCategory category,
-        string[] memory tags,
-        bool isReward
-    ) internal returns (uint256) {
-        _transactionCounter++;
-        
-        transactions[_transactionCounter] = CulturalTransaction({
-            id: _transactionCounter,
-            from: from,
-            to: to,
-            amount: amount,
-            purpose: purpose,
-            category: category,
-            tags: tags,
-            timestamp: block.timestamp,
-            isReward: isReward
-        });
-
-        if (from != address(0)) {
-            userTransactions[from].push(_transactionCounter);
-        }
-        userTransactions[to].push(_transactionCounter);
-
-        emit CulturalTransactionCreated(
-            _transactionCounter,
-            from,
-            to,
-            amount,
-            purpose,
-            category
-        );
-
-        return _transactionCounter;
+    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) {
+        require(totalSupply() + amount <= MAX_SUPPLY, "Exceeds max supply");
+        _mint(to, amount);
     }
 
     /**
-     * @dev 更新用户统计信息
+     * @dev 重写 _update 函数以支持暂停功能
      */
-    function _updateUserStats(
-        address user,
-        uint256 amount,
-        bool isSpending,
-        TransactionCategory category
-    ) internal {
-        UserStats storage stats = userStats[user];
-        
-        if (isSpending) {
-            stats.totalSpent += amount;
-        } else {
-            stats.totalEarned += amount;
-        }
-        
-        stats.totalTransactions++;
-        stats.lastActivityTime = block.timestamp;
-        stats.categoryStats[category] += amount;
-    }
-
-    /**
-     * @dev 重写转账前检查
-     */
-    function _beforeTokenTransfer(
+    function _update(
         address from,
         address to,
-        uint256 amount
+        uint256 value
     ) internal override(ERC20Upgradeable, ERC20PausableUpgradeable) {
-        super._beforeTokenTransfer(from, to, amount);
+        super._update(from, to, value);
     }
 
     /**
@@ -429,7 +340,14 @@ contract CultureBridgeToken is
      * @dev 获取合约版本
      */
     function version() public pure returns (string memory) {
-        return "1.0.0";
+        return "2.0.0";
+    }
+
+    /**
+     * @dev 支持接口检查
+     */
+    function supportsInterface(bytes4 interfaceId) public view virtual override(AccessControlUpgradeable) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }
 
