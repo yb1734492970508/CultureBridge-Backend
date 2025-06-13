@@ -5,637 +5,570 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 
-// Google Cloud APIs
-const speech = require('@google-cloud/speech');
-const { Translate } = require('@google-cloud/translate').v2;
-const textToSpeech = require('@google-cloud/text-to-speech');
-
-// Redis for caching
-const redis = require('redis');
+// 语音识别和翻译服务（使用开源替代方案）
+const ffmpeg = require('fluent-ffmpeg');
+const axios = require('axios');
 
 class EnhancedVoiceTranslationService {
     constructor() {
-        // 初始化Google Cloud客户端
-        this.speechClient = new speech.SpeechClient({
-            keyFilename: process.env.GOOGLE_CLOUD_KEY_FILE,
-            projectId: process.env.GOOGLE_CLOUD_PROJECT_ID
-        });
+        // 配置多个翻译服务提供商
+        this.translationProviders = {
+            libre: {
+                url: process.env.LIBRE_TRANSLATE_URL || 'https://libretranslate.de/translate',
+                apiKey: process.env.LIBRE_TRANSLATE_API_KEY
+            },
+            mymemory: {
+                url: 'https://api.mymemory.translated.net/get',
+                email: process.env.MYMEMORY_EMAIL
+            },
+            azure: {
+                url: process.env.AZURE_TRANSLATE_URL,
+                apiKey: process.env.AZURE_TRANSLATE_KEY,
+                region: process.env.AZURE_TRANSLATE_REGION
+            }
+        };
         
-        this.translateClient = new Translate({
-            keyFilename: process.env.GOOGLE_CLOUD_KEY_FILE,
-            projectId: process.env.GOOGLE_CLOUD_PROJECT_ID
-        });
-        
-        this.ttsClient = new textToSpeech.TextToSpeechClient({
-            keyFilename: process.env.GOOGLE_CLOUD_KEY_FILE,
-            projectId: process.env.GOOGLE_CLOUD_PROJECT_ID
-        });
-        
-        // Redis缓存客户端
-        this.redisClient = redis.createClient({
-            host: process.env.REDIS_HOST || 'localhost',
-            port: process.env.REDIS_PORT || 6379
-        });
+        // 语音识别服务配置
+        this.speechProviders = {
+            whisper: {
+                url: process.env.WHISPER_API_URL || 'http://localhost:9000/asr',
+                model: 'whisper-1'
+            },
+            azure: {
+                url: process.env.AZURE_SPEECH_URL,
+                apiKey: process.env.AZURE_SPEECH_KEY,
+                region: process.env.AZURE_SPEECH_REGION
+            }
+        };
         
         // 支持的语言配置
         this.supportedLanguages = {
-            'zh': { 
-                name: '中文', 
-                voice: 'zh-CN-Wavenet-A',
-                speechCode: 'zh-CN',
-                culturalContext: ['中华文化', '传统节日', '茶文化', '书法', '太极']
-            },
-            'en': { 
-                name: 'English', 
-                voice: 'en-US-Wavenet-D',
-                speechCode: 'en-US',
-                culturalContext: ['Western culture', 'holidays', 'coffee culture', 'sports', 'movies']
-            },
-            'es': { 
-                name: 'Español', 
-                voice: 'es-ES-Wavenet-B',
-                speechCode: 'es-ES',
-                culturalContext: ['cultura hispana', 'flamenco', 'siesta', 'tapas', 'fútbol']
-            },
-            'fr': { 
-                name: 'Français', 
-                voice: 'fr-FR-Wavenet-A',
-                speechCode: 'fr-FR',
-                culturalContext: ['culture française', 'cuisine', 'art', 'mode', 'vin']
-            },
-            'de': { 
-                name: 'Deutsch', 
-                voice: 'de-DE-Wavenet-A',
-                speechCode: 'de-DE',
-                culturalContext: ['deutsche Kultur', 'Oktoberfest', 'Bier', 'Musik', 'Technik']
-            },
-            'ja': { 
-                name: '日本語', 
-                voice: 'ja-JP-Wavenet-A',
-                speechCode: 'ja-JP',
-                culturalContext: ['日本文化', '茶道', '武道', 'アニメ', '桜']
-            },
-            'ko': { 
-                name: '한국어', 
-                voice: 'ko-KR-Wavenet-A',
-                speechCode: 'ko-KR',
-                culturalContext: ['한국 문화', 'K-pop', '김치', '태권도', '한복']
-            },
-            'pt': { 
-                name: 'Português', 
-                voice: 'pt-BR-Wavenet-A',
-                speechCode: 'pt-BR',
-                culturalContext: ['cultura brasileira', 'samba', 'futebol', 'carnaval', 'capoeira']
-            },
-            'ru': { 
-                name: 'Русский', 
-                voice: 'ru-RU-Wavenet-A',
-                speechCode: 'ru-RU',
-                culturalContext: ['русская культура', 'балет', 'водка', 'матрёшка', 'борщ']
-            },
-            'ar': { 
-                name: 'العربية', 
-                voice: 'ar-XA-Wavenet-A',
-                speechCode: 'ar-SA',
-                culturalContext: ['الثقافة العربية', 'الخط العربي', 'الشاي', 'الضيافة', 'الشعر']
+            'zh': { name: '中文', code: 'zh-CN', whisperCode: 'zh' },
+            'en': { name: 'English', code: 'en-US', whisperCode: 'en' },
+            'es': { name: 'Español', code: 'es-ES', whisperCode: 'es' },
+            'fr': { name: 'Français', code: 'fr-FR', whisperCode: 'fr' },
+            'de': { name: 'Deutsch', code: 'de-DE', whisperCode: 'de' },
+            'ja': { name: '日本語', code: 'ja-JP', whisperCode: 'ja' },
+            'ko': { name: '한국어', code: 'ko-KR', whisperCode: 'ko' },
+            'pt': { name: 'Português', code: 'pt-BR', whisperCode: 'pt' },
+            'ru': { name: 'Русский', code: 'ru-RU', whisperCode: 'ru' },
+            'ar': { name: 'العربية', code: 'ar-SA', whisperCode: 'ar' },
+            'it': { name: 'Italiano', code: 'it-IT', whisperCode: 'it' },
+            'nl': { name: 'Nederlands', code: 'nl-NL', whisperCode: 'nl' },
+            'pl': { name: 'Polski', code: 'pl-PL', whisperCode: 'pl' },
+            'tr': { name: 'Türkçe', code: 'tr-TR', whisperCode: 'tr' },
+            'hi': { name: 'हिन्दी', code: 'hi-IN', whisperCode: 'hi' }
+        };
+        
+        // 音频格式配置
+        this.audioConfig = {
+            sampleRate: 16000,
+            channels: 1,
+            format: 'wav',
+            maxDuration: 300, // 5分钟
+            maxFileSize: 50 * 1024 * 1024 // 50MB
+        };
+        
+        // 缓存配置
+        this.cache = new Map();
+        this.cacheTimeout = 30 * 60 * 1000; // 30分钟
+        
+        this.initializeServices();
+    }
+    
+    async initializeServices() {
+        try {
+            // 检查Whisper服务可用性
+            if (this.speechProviders.whisper.url) {
+                try {
+                    await axios.get(this.speechProviders.whisper.url.replace('/asr', '/health'));
+                    console.log('Whisper语音识别服务已连接');
+                } catch (error) {
+                    console.warn('Whisper服务不可用，将使用备用方案');
+                }
             }
-        };
-        
-        // 文化关键词检测
-        this.culturalKeywords = {
-            'zh': ['文化', '传统', '习俗', '节日', '历史', '艺术', '美食', '语言'],
-            'en': ['culture', 'tradition', 'custom', 'festival', 'history', 'art', 'food', 'language'],
-            'es': ['cultura', 'tradición', 'costumbre', 'festival', 'historia', 'arte', 'comida', 'idioma'],
-            'fr': ['culture', 'tradition', 'coutume', 'festival', 'histoire', 'art', 'nourriture', 'langue'],
-            'de': ['Kultur', 'Tradition', 'Brauch', 'Festival', 'Geschichte', 'Kunst', 'Essen', 'Sprache'],
-            'ja': ['文化', '伝統', '習慣', '祭り', '歴史', '芸術', '料理', '言語'],
-            'ko': ['문화', '전통', '관습', '축제', '역사', '예술', '음식', '언어'],
-            'pt': ['cultura', 'tradição', 'costume', 'festival', 'história', 'arte', 'comida', 'idioma'],
-            'ru': ['культура', 'традиция', 'обычай', 'фестиваль', 'история', 'искусство', 'еда', 'язык'],
-            'ar': ['ثقافة', 'تقليد', 'عادة', 'مهرجان', 'تاريخ', 'فن', 'طعام', 'لغة']
-        };
-        
-        // 流式识别配置
-        this.streamingConfig = {
-            config: {
-                encoding: 'WEBM_OPUS',
-                sampleRateHertz: 48000,
-                languageCode: 'zh-CN',
-                alternativeLanguageCodes: ['en-US', 'es-ES', 'fr-FR', 'de-DE', 'ja-JP'],
-                enableAutomaticPunctuation: true,
-                enableWordTimeOffsets: true,
-                enableWordConfidence: true,
-                model: 'latest_long',
-                useEnhanced: true
-            },
-            interimResults: true,
-            singleUtterance: false
-        };
+            
+            // 检查翻译服务可用性
+            await this.testTranslationServices();
+            
+        } catch (error) {
+            console.error('初始化语音翻译服务失败:', error);
+        }
     }
     
     /**
-     * 实时语音转文字（流式识别）
-     * @param {ReadableStream} audioStream 音频流
-     * @param {string} language 语言代码
-     * @param {Function} onResult 结果回调函数
-     * @param {Function} onError 错误回调函数
-     * @returns {Promise<Object>} 流式识别对象
+     * 测试翻译服务可用性
      */
-    async startStreamingRecognition(audioStream, language = 'auto', onResult, onError) {
-        try {
-            const config = { ...this.streamingConfig };
-            
-            if (language !== 'auto') {
-                config.config.languageCode = this.getLanguageCode(language);
-                config.config.alternativeLanguageCodes = [];
-            }
-            
-            const recognizeStream = this.speechClient
-                .streamingRecognize(config)
-                .on('error', (error) => {
-                    console.error('流式识别错误:', error);
-                    if (onError) onError(error);
-                })
-                .on('data', (data) => {
-                    if (data.results[0] && data.results[0].alternatives[0]) {
-                        const result = {
-                            transcript: data.results[0].alternatives[0].transcript,
-                            confidence: data.results[0].alternatives[0].confidence || 0,
-                            isFinal: data.results[0].isFinal,
-                            stability: data.results[0].stability || 0,
-                            words: data.results[0].alternatives[0].words || [],
-                            detectedLanguage: this.normalizeLanguageCode(data.results[0].languageCode || language)
-                        };
-                        
-                        if (onResult) onResult(result);
+    async testTranslationServices() {
+        for (const [provider, config] of Object.entries(this.translationProviders)) {
+            try {
+                if (provider === 'libre' && config.url) {
+                    const response = await axios.post(config.url, {
+                        q: 'hello',
+                        source: 'en',
+                        target: 'zh',
+                        format: 'text'
+                    }, {
+                        headers: config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {},
+                        timeout: 5000
+                    });
+                    
+                    if (response.data && response.data.translatedText) {
+                        console.log(`${provider}翻译服务可用`);
                     }
-                });
-            
-            // 将音频流连接到识别流
-            audioStream.pipe(recognizeStream);
-            
-            return recognizeStream;
-        } catch (error) {
-            console.error('启动流式识别失败:', error);
-            throw new Error('流式语音识别服务暂时不可用');
+                }
+            } catch (error) {
+                console.warn(`${provider}翻译服务不可用:`, error.message);
+            }
         }
     }
     
     /**
-     * 语音转文字（批量识别）
+     * 处理语音消息
      * @param {Buffer} audioBuffer 音频数据
-     * @param {string} language 语言代码
-     * @returns {Promise<Object>} 转录结果
-     */
-    async transcribeAudio(audioBuffer, language = 'auto') {
-        try {
-            // 检查缓存
-            const cacheKey = `transcribe_${this.generateAudioHash(audioBuffer)}_${language}`;
-            const cachedResult = await this.redisClient.get(cacheKey);
-            
-            if (cachedResult) {
-                return JSON.parse(cachedResult);
-            }
-            
-            const request = {
-                audio: {
-                    content: audioBuffer.toString('base64')
-                },
-                config: {
-                    encoding: 'WEBM_OPUS',
-                    sampleRateHertz: 48000,
-                    languageCode: language === 'auto' ? 'zh-CN' : this.getLanguageCode(language),
-                    alternativeLanguageCodes: language === 'auto' ? ['en-US', 'es-ES', 'fr-FR', 'de-DE', 'ja-JP'] : [],
-                    enableAutomaticPunctuation: true,
-                    enableWordTimeOffsets: true,
-                    enableWordConfidence: true,
-                    model: 'latest_long',
-                    useEnhanced: true,
-                    profanityFilter: false,
-                    enableSpeakerDiarization: false,
-                    diarizationSpeakerCount: 1
-                }
-            };
-            
-            const [response] = await this.speechClient.recognize(request);
-            
-            if (!response.results || response.results.length === 0) {
-                throw new Error('无法识别语音内容');
-            }
-            
-            const transcription = response.results
-                .map(result => result.alternatives[0].transcript)
-                .join(' ');
-                
-            const confidence = response.results[0].alternatives[0].confidence || 0;
-            const detectedLanguage = this.normalizeLanguageCode(response.results[0].languageCode || language);
-            
-            // 检测文化内容
-            const culturalContext = this.detectCulturalContent(transcription, detectedLanguage);
-            
-            const result = {
-                text: transcription,
-                confidence,
-                detectedLanguage,
-                culturalContext,
-                wordTimings: response.results[0].alternatives[0].words || [],
-                alternatives: response.results[0].alternatives.slice(1).map(alt => ({
-                    text: alt.transcript,
-                    confidence: alt.confidence || 0
-                }))
-            };
-            
-            // 缓存结果（1小时）
-            await this.redisClient.setex(cacheKey, 3600, JSON.stringify(result));
-            
-            return result;
-        } catch (error) {
-            console.error('语音转文字失败:', error);
-            throw new Error('语音识别服务暂时不可用');
-        }
-    }
-    
-    /**
-     * 文本翻译（支持文化上下文）
-     * @param {string} text 要翻译的文本
      * @param {string} sourceLanguage 源语言
-     * @param {string} targetLanguage 目标语言
-     * @param {string} culturalContext 文化上下文
-     * @returns {Promise<Object>} 翻译结果
-     */
-    async translateText(text, sourceLanguage, targetLanguage, culturalContext = null) {
-        try {
-            if (sourceLanguage === targetLanguage) {
-                return {
-                    text: text,
-                    confidence: 1.0,
-                    detectedLanguage: sourceLanguage,
-                    culturalNotes: []
-                };
-            }
-            
-            // 检查缓存
-            const cacheKey = `translate_${this.generateTextHash(text)}_${sourceLanguage}_${targetLanguage}`;
-            const cachedResult = await this.redisClient.get(cacheKey);
-            
-            if (cachedResult) {
-                return JSON.parse(cachedResult);
-            }
-            
-            // 如果有文化上下文，添加到翻译文本中
-            let textToTranslate = text;
-            if (culturalContext) {
-                textToTranslate = `[文化背景: ${culturalContext}] ${text}`;
-            }
-            
-            const [translation, metadata] = await this.translateClient.translate(textToTranslate, {
-                from: sourceLanguage,
-                to: targetLanguage
-            });
-            
-            let translatedText = Array.isArray(translation) ? translation[0] : translation;
-            
-            // 移除文化背景标记
-            if (culturalContext) {
-                translatedText = translatedText.replace(/^\[.*?\]\s*/, '');
-            }
-            
-            // 生成文化注释
-            const culturalNotes = this.generateCulturalNotes(text, sourceLanguage, targetLanguage);
-            
-            const result = {
-                text: translatedText,
-                confidence: 0.95,
-                detectedLanguage: metadata.data.translations[0].detectedSourceLanguage || sourceLanguage,
-                culturalNotes,
-                originalText: text
-            };
-            
-            // 缓存结果（24小时）
-            await this.redisClient.setex(cacheKey, 86400, JSON.stringify(result));
-            
-            return result;
-        } catch (error) {
-            console.error('文本翻译失败:', error);
-            throw new Error('翻译服务暂时不可用');
-        }
-    }
-    
-    /**
-     * 文字转语音（支持情感和语调）
-     * @param {string} text 要合成的文本
-     * @param {string} language 语言代码
-     * @param {Object} options 语音选项
-     * @returns {Promise<Buffer>} 音频数据
-     */
-    async synthesizeSpeech(text, language, options = {}) {
-        try {
-            const {
-                voiceType = 'neutral',
-                speakingRate = 1.0,
-                pitch = 0.0,
-                volumeGain = 0.0,
-                emotion = 'neutral'
-            } = options;
-            
-            // 检查缓存
-            const cacheKey = `tts_${this.generateTextHash(text)}_${language}_${JSON.stringify(options)}`;
-            const cachedResult = await this.redisClient.get(cacheKey);
-            
-            if (cachedResult) {
-                return Buffer.from(cachedResult, 'base64');
-            }
-            
-            const voiceName = this.supportedLanguages[language]?.voice || 'en-US-Wavenet-D';
-            
-            // 根据情感调整语音参数
-            let adjustedPitch = pitch;
-            let adjustedRate = speakingRate;
-            
-            switch (emotion) {
-                case 'happy':
-                    adjustedPitch += 2.0;
-                    adjustedRate += 0.1;
-                    break;
-                case 'sad':
-                    adjustedPitch -= 2.0;
-                    adjustedRate -= 0.1;
-                    break;
-                case 'excited':
-                    adjustedPitch += 3.0;
-                    adjustedRate += 0.2;
-                    break;
-                case 'calm':
-                    adjustedPitch -= 1.0;
-                    adjustedRate -= 0.05;
-                    break;
-            }
-            
-            const request = {
-                input: { text: text },
-                voice: {
-                    languageCode: this.getLanguageCode(language),
-                    name: voiceName,
-                    ssmlGender: 'NEUTRAL'
-                },
-                audioConfig: {
-                    audioEncoding: 'MP3',
-                    speakingRate: Math.max(0.25, Math.min(4.0, adjustedRate)),
-                    pitch: Math.max(-20.0, Math.min(20.0, adjustedPitch)),
-                    volumeGainDb: Math.max(-96.0, Math.min(16.0, volumeGain)),
-                    effectsProfileId: ['telephony-class-application']
-                }
-            };
-            
-            const [response] = await this.ttsClient.synthesizeSpeech(request);
-            
-            // 缓存结果（1小时）
-            await this.redisClient.setex(cacheKey, 3600, response.audioContent.toString('base64'));
-            
-            return response.audioContent;
-        } catch (error) {
-            console.error('文字转语音失败:', error);
-            throw new Error('语音合成服务暂时不可用');
-        }
-    }
-    
-    /**
-     * 处理语音消息（完整流程）
-     * @param {Object} data 语音消息数据
+     * @param {string[]} targetLanguages 目标语言列表
+     * @param {string} userId 用户ID
+     * @param {string} roomId 房间ID
      * @returns {Promise<Object>} 处理结果
      */
-    async processVoiceMessage(data) {
+    async processVoiceMessage(audioBuffer, sourceLanguage = 'auto', targetLanguages = ['en'], userId, roomId) {
         try {
-            const { audioData, sourceLanguage, targetLanguage, userId, roomId } = data;
-            
-            // 1. 语音转文字
-            const transcriptionResult = await this.transcribeAudio(audioData, sourceLanguage);
-            
-            if (!transcriptionResult.text) {
-                return { success: false, error: '无法识别语音内容' };
+            // 验证音频数据
+            if (!audioBuffer || audioBuffer.length === 0) {
+                throw new Error('音频数据为空');
             }
             
-            // 2. 翻译文本
-            const translationResult = await this.translateText(
-                transcriptionResult.text,
-                transcriptionResult.detectedLanguage,
-                targetLanguage,
-                transcriptionResult.culturalContext
-            );
+            if (audioBuffer.length > this.audioConfig.maxFileSize) {
+                throw new Error('音频文件过大');
+            }
             
-            // 3. 生成翻译后的语音
-            const translatedAudio = await this.synthesizeSpeech(
-                translationResult.text,
-                targetLanguage,
-                { emotion: 'neutral', speakingRate: 1.0 }
-            );
+            // 生成唯一ID
+            const translationId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             
-            // 4. 保存音频文件
-            const originalAudioPath = await this.saveAudioFile(audioData, 'original', userId);
-            const translatedAudioPath = await this.saveAudioFile(translatedAudio, 'translated', userId);
+            // 保存原始音频文件
+            const audioPath = await this.saveAudioFile(audioBuffer, translationId);
             
-            // 5. 保存到数据库
+            // 转换音频格式
+            const processedAudioPath = await this.convertAudio(audioPath);
+            
+            // 语音转文字
+            const transcriptionResult = await this.speechToText(processedAudioPath, sourceLanguage);
+            
+            if (!transcriptionResult.text || transcriptionResult.text.trim().length === 0) {
+                throw new Error('语音识别失败，未检测到有效文本');
+            }
+            
+            // 检测语言（如果是自动检测）
+            let detectedLanguage = sourceLanguage;
+            if (sourceLanguage === 'auto') {
+                detectedLanguage = await this.detectLanguage(transcriptionResult.text);
+            }
+            
+            // 翻译文本
+            const translations = [];
+            for (const targetLang of targetLanguages) {
+                if (targetLang !== detectedLanguage) {
+                    try {
+                        const translation = await this.translateText(
+                            transcriptionResult.text,
+                            detectedLanguage,
+                            targetLang
+                        );
+                        translations.push({
+                            language: targetLang,
+                            text: translation.text,
+                            confidence: translation.confidence || 0.8
+                        });
+                    } catch (error) {
+                        console.warn(`翻译到${targetLang}失败:`, error);
+                        translations.push({
+                            language: targetLang,
+                            text: transcriptionResult.text,
+                            confidence: 0.1,
+                            error: error.message
+                        });
+                    }
+                }
+            }
+            
+            // 生成翻译后的语音（可选）
+            const audioUrls = {};
+            for (const translation of translations) {
+                try {
+                    const audioUrl = await this.textToSpeech(
+                        translation.text,
+                        translation.language,
+                        translationId
+                    );
+                    audioUrls[translation.language] = audioUrl;
+                } catch (error) {
+                    console.warn(`生成${translation.language}语音失败:`, error);
+                }
+            }
+            
+            // 保存到数据库
             const voiceTranslation = new VoiceTranslation({
                 user: userId,
                 chatRoom: roomId,
                 originalText: transcriptionResult.text,
-                translatedText: translationResult.text,
-                sourceLanguage: transcriptionResult.detectedLanguage,
-                targetLanguage: targetLanguage,
-                originalAudioPath: originalAudioPath,
-                translatedAudioPath: translatedAudioPath,
-                confidence: transcriptionResult.confidence,
-                culturalContext: transcriptionResult.culturalContext,
-                culturalNotes: translationResult.culturalNotes,
-                processingTime: Date.now() - data.startTime || 0
+                originalLanguage: detectedLanguage,
+                originalAudioUrl: `/uploads/voice/${path.basename(audioPath)}`,
+                translations: translations.map(t => ({
+                    language: t.language,
+                    text: t.text,
+                    confidence: t.confidence,
+                    audioUrl: audioUrls[t.language] || null
+                })),
+                confidence: transcriptionResult.confidence || 0.8,
+                processingTime: Date.now() - parseInt(translationId.split('_')[1]),
+                metadata: {
+                    audioFormat: 'wav',
+                    sampleRate: this.audioConfig.sampleRate,
+                    duration: transcriptionResult.duration || 0,
+                    fileSize: audioBuffer.length
+                }
             });
             
             await voiceTranslation.save();
             
+            // 清理临时文件
+            this.cleanupTempFiles([audioPath, processedAudioPath]);
+            
             return {
                 success: true,
-                originalText: transcriptionResult.text,
-                translatedText: translationResult.text,
-                originalAudioUrl: `/audio/${path.basename(originalAudioPath)}`,
-                translatedAudioUrl: `/audio/${path.basename(translatedAudioPath)}`,
-                confidence: transcriptionResult.confidence,
-                culturalContext: transcriptionResult.culturalContext,
-                culturalNotes: translationResult.culturalNotes,
-                detectedLanguage: transcriptionResult.detectedLanguage
+                data: {
+                    id: voiceTranslation._id,
+                    originalText: transcriptionResult.text,
+                    originalLanguage: detectedLanguage,
+                    translations,
+                    confidence: transcriptionResult.confidence || 0.8,
+                    audioUrl: voiceTranslation.originalAudioUrl,
+                    audioUrls,
+                    duration: transcriptionResult.duration || 0,
+                    processingTime: voiceTranslation.processingTime
+                }
             };
+            
         } catch (error) {
             console.error('处理语音消息失败:', error);
-            return { success: false, error: error.message };
+            throw new ErrorResponse(`语音处理失败: ${error.message}`, 500);
         }
     }
     
     /**
-     * 检测文化内容
-     * @param {string} text 文本内容
+     * 语音转文字
+     * @param {string} audioPath 音频文件路径
      * @param {string} language 语言代码
-     * @returns {string|null} 文化上下文
+     * @returns {Promise<Object>} 转录结果
      */
-    detectCulturalContent(text, language) {
-        const keywords = this.culturalKeywords[language] || [];
-        const culturalContext = this.supportedLanguages[language]?.culturalContext || [];
-        
-        // 检查是否包含文化关键词
-        const hasCulturalKeywords = keywords.some(keyword => 
-            text.toLowerCase().includes(keyword.toLowerCase())
-        );
-        
-        if (hasCulturalKeywords) {
-            // 尝试匹配具体的文化主题
-            for (const context of culturalContext) {
-                if (text.toLowerCase().includes(context.toLowerCase())) {
-                    return context;
-                }
+    async speechToText(audioPath, language = 'auto') {
+        try {
+            // 优先使用Whisper
+            if (this.speechProviders.whisper.url) {
+                return await this.whisperSpeechToText(audioPath, language);
             }
-            return '文化交流';
+            
+            // 备用方案：Azure语音服务
+            if (this.speechProviders.azure.apiKey) {
+                return await this.azureSpeechToText(audioPath, language);
+            }
+            
+            // 最后备用方案：本地处理
+            return await this.localSpeechToText(audioPath, language);
+            
+        } catch (error) {
+            console.error('语音转文字失败:', error);
+            throw error;
         }
-        
-        return null;
     }
     
     /**
-     * 生成文化注释
-     * @param {string} text 原文本
+     * 使用Whisper进行语音识别
+     */
+    async whisperSpeechToText(audioPath, language) {
+        try {
+            const formData = new FormData();
+            const audioBuffer = await fs.readFile(audioPath);
+            formData.append('audio_file', audioBuffer, 'audio.wav');
+            
+            if (language !== 'auto' && this.supportedLanguages[language]) {
+                formData.append('language', this.supportedLanguages[language].whisperCode);
+            }
+            
+            const response = await axios.post(this.speechProviders.whisper.url, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data'
+                },
+                timeout: 30000
+            });
+            
+            if (response.data && response.data.text) {
+                return {
+                    text: response.data.text.trim(),
+                    confidence: response.data.confidence || 0.8,
+                    language: response.data.language || language,
+                    duration: response.data.duration || 0
+                };
+            }
+            
+            throw new Error('Whisper返回无效结果');
+            
+        } catch (error) {
+            console.error('Whisper语音识别失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 文本翻译
+     * @param {string} text 待翻译文本
      * @param {string} sourceLanguage 源语言
      * @param {string} targetLanguage 目标语言
-     * @returns {Array} 文化注释数组
+     * @returns {Promise<Object>} 翻译结果
      */
-    generateCulturalNotes(text, sourceLanguage, targetLanguage) {
-        const notes = [];
-        
-        // 简化的文化注释生成逻辑
-        const culturalTerms = {
-            'zh': {
-                '春节': 'Chinese New Year, the most important traditional festival in China',
-                '中秋节': 'Mid-Autumn Festival, a harvest festival celebrated in Chinese culture',
-                '茶文化': 'Tea culture, an important part of Chinese tradition',
-                '太极': 'Tai Chi, a traditional Chinese martial art'
-            },
-            'en': {
-                'thanksgiving': '感恩节，美国的传统节日，感谢丰收和祝福',
-                'halloween': '万圣节，西方传统节日，孩子们会装扮成各种角色',
-                'christmas': '圣诞节，庆祝耶稣基督诞生的基督教节日'
+    async translateText(text, sourceLanguage, targetLanguage) {
+        try {
+            // 检查缓存
+            const cacheKey = `${text}_${sourceLanguage}_${targetLanguage}`;
+            if (this.cache.has(cacheKey)) {
+                const cached = this.cache.get(cacheKey);
+                if (Date.now() - cached.timestamp < this.cacheTimeout) {
+                    return cached.data;
+                }
+                this.cache.delete(cacheKey);
             }
-        };
-        
-        const terms = culturalTerms[sourceLanguage] || {};
-        
-        for (const [term, explanation] of Object.entries(terms)) {
-            if (text.toLowerCase().includes(term.toLowerCase())) {
-                notes.push({
-                    term: term,
-                    explanation: explanation,
-                    category: 'cultural'
-                });
+            
+            let result = null;
+            
+            // 尝试LibreTranslate
+            if (this.translationProviders.libre.url) {
+                try {
+                    result = await this.libreTranslate(text, sourceLanguage, targetLanguage);
+                } catch (error) {
+                    console.warn('LibreTranslate失败:', error.message);
+                }
             }
+            
+            // 备用方案：MyMemory
+            if (!result) {
+                try {
+                    result = await this.myMemoryTranslate(text, sourceLanguage, targetLanguage);
+                } catch (error) {
+                    console.warn('MyMemory翻译失败:', error.message);
+                }
+            }
+            
+            // 最后备用方案：Azure翻译
+            if (!result && this.translationProviders.azure.apiKey) {
+                try {
+                    result = await this.azureTranslate(text, sourceLanguage, targetLanguage);
+                } catch (error) {
+                    console.warn('Azure翻译失败:', error.message);
+                }
+            }
+            
+            if (!result) {
+                throw new Error('所有翻译服务都不可用');
+            }
+            
+            // 缓存结果
+            this.cache.set(cacheKey, {
+                data: result,
+                timestamp: Date.now()
+            });
+            
+            return result;
+            
+        } catch (error) {
+            console.error('文本翻译失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * LibreTranslate翻译
+     */
+    async libreTranslate(text, sourceLanguage, targetLanguage) {
+        const response = await axios.post(this.translationProviders.libre.url, {
+            q: text,
+            source: sourceLanguage === 'auto' ? 'auto' : sourceLanguage,
+            target: targetLanguage,
+            format: 'text'
+        }, {
+            headers: this.translationProviders.libre.apiKey ? {
+                'Authorization': `Bearer ${this.translationProviders.libre.apiKey}`
+            } : {},
+            timeout: 10000
+        });
+        
+        if (response.data && response.data.translatedText) {
+            return {
+                text: response.data.translatedText,
+                confidence: 0.8,
+                provider: 'libre'
+            };
         }
         
-        return notes;
+        throw new Error('LibreTranslate返回无效结果');
+    }
+    
+    /**
+     * MyMemory翻译
+     */
+    async myMemoryTranslate(text, sourceLanguage, targetLanguage) {
+        const langPair = `${sourceLanguage}|${targetLanguage}`;
+        const params = {
+            q: text,
+            langpair: langPair
+        };
+        
+        if (this.translationProviders.mymemory.email) {
+            params.de = this.translationProviders.mymemory.email;
+        }
+        
+        const response = await axios.get(this.translationProviders.mymemory.url, {
+            params,
+            timeout: 10000
+        });
+        
+        if (response.data && response.data.responseData && response.data.responseData.translatedText) {
+            return {
+                text: response.data.responseData.translatedText,
+                confidence: response.data.responseData.match || 0.7,
+                provider: 'mymemory'
+            };
+        }
+        
+        throw new Error('MyMemory返回无效结果');
+    }
+    
+    /**
+     * 语言检测
+     */
+    async detectLanguage(text) {
+        try {
+            // 简单的语言检测逻辑
+            const chineseRegex = /[\u4e00-\u9fff]/;
+            const arabicRegex = /[\u0600-\u06ff]/;
+            const japaneseRegex = /[\u3040-\u309f\u30a0-\u30ff]/;
+            const koreanRegex = /[\uac00-\ud7af]/;
+            
+            if (chineseRegex.test(text)) return 'zh';
+            if (arabicRegex.test(text)) return 'ar';
+            if (japaneseRegex.test(text)) return 'ja';
+            if (koreanRegex.test(text)) return 'ko';
+            
+            // 默认返回英语
+            return 'en';
+        } catch (error) {
+            console.warn('语言检测失败:', error);
+            return 'en';
+        }
+    }
+    
+    /**
+     * 文本转语音
+     */
+    async textToSpeech(text, language, translationId) {
+        try {
+            // 这里可以集成TTS服务，暂时返回null
+            console.log(`TTS请求: ${text} (${language})`);
+            return null;
+        } catch (error) {
+            console.error('文本转语音失败:', error);
+            return null;
+        }
     }
     
     /**
      * 保存音频文件
-     * @param {Buffer} audioData 音频数据
-     * @param {string} type 文件类型
-     * @param {string} userId 用户ID
-     * @returns {Promise<string>} 文件路径
      */
-    async saveAudioFile(audioData, type, userId) {
-        try {
-            const audioDir = path.join(process.cwd(), 'uploads', 'audio');
-            await fs.mkdir(audioDir, { recursive: true });
-            
-            const filename = `${type}_${userId}_${Date.now()}.mp3`;
-            const filepath = path.join(audioDir, filename);
-            
-            await fs.writeFile(filepath, audioData);
-            
-            return filepath;
-        } catch (error) {
-            console.error('保存音频文件失败:', error);
-            throw new Error('保存音频文件失败');
-        }
-    }
-    
-    /**
-     * 生成音频哈希
-     * @param {Buffer} audioBuffer 音频数据
-     * @returns {string} 哈希值
-     */
-    generateAudioHash(audioBuffer) {
-        const crypto = require('crypto');
-        return crypto.createHash('md5').update(audioBuffer).digest('hex');
-    }
-    
-    /**
-     * 生成文本哈希
-     * @param {string} text 文本内容
-     * @returns {string} 哈希值
-     */
-    generateTextHash(text) {
-        const crypto = require('crypto');
-        return crypto.createHash('md5').update(text).digest('hex');
-    }
-    
-    /**
-     * 获取语言代码
-     * @param {string} language 简化语言代码
-     * @returns {string} 完整语言代码
-     */
-    getLanguageCode(language) {
-        return this.supportedLanguages[language]?.speechCode || 'en-US';
-    }
-    
-    /**
-     * 标准化语言代码
-     * @param {string} languageCode 完整语言代码
-     * @returns {string} 简化语言代码
-     */
-    normalizeLanguageCode(languageCode) {
-        const mapping = {
-            'zh-CN': 'zh',
-            'zh-TW': 'zh',
-            'en-US': 'en',
-            'en-GB': 'en',
-            'es-ES': 'es',
-            'es-MX': 'es',
-            'fr-FR': 'fr',
-            'fr-CA': 'fr',
-            'de-DE': 'de',
-            'ja-JP': 'ja',
-            'ko-KR': 'ko',
-            'pt-BR': 'pt',
-            'pt-PT': 'pt',
-            'ru-RU': 'ru',
-            'ar-SA': 'ar'
-        };
+    async saveAudioFile(audioBuffer, translationId) {
+        const uploadDir = path.join(__dirname, '../../uploads/voice');
+        await fs.mkdir(uploadDir, { recursive: true });
         
-        return mapping[languageCode] || languageCode.split('-')[0];
+        const filename = `${translationId}_original.wav`;
+        const filepath = path.join(uploadDir, filename);
+        
+        await fs.writeFile(filepath, audioBuffer);
+        return filepath;
+    }
+    
+    /**
+     * 转换音频格式
+     */
+    async convertAudio(inputPath) {
+        return new Promise((resolve, reject) => {
+            const outputPath = inputPath.replace('.wav', '_processed.wav');
+            
+            ffmpeg(inputPath)
+                .audioFrequency(this.audioConfig.sampleRate)
+                .audioChannels(this.audioConfig.channels)
+                .audioCodec('pcm_s16le')
+                .format('wav')
+                .on('end', () => resolve(outputPath))
+                .on('error', reject)
+                .save(outputPath);
+        });
+    }
+    
+    /**
+     * 清理临时文件
+     */
+    async cleanupTempFiles(filePaths) {
+        for (const filePath of filePaths) {
+            try {
+                await fs.unlink(filePath);
+            } catch (error) {
+                console.warn(`清理文件失败: ${filePath}`, error);
+            }
+        }
     }
     
     /**
      * 获取支持的语言列表
-     * @returns {Array} 支持的语言列表
      */
     getSupportedLanguages() {
-        return Object.entries(this.supportedLanguages).map(([code, info]) => ({
-            code,
-            name: info.name,
-            culturalContext: info.culturalContext
-        }));
+        return this.supportedLanguages;
     }
     
     /**
-     * 关闭服务
+     * 获取服务状态
      */
-    async close() {
-        if (this.redisClient) {
-            await this.redisClient.quit();
+    async getServiceStatus() {
+        const status = {
+            whisper: false,
+            libre: false,
+            mymemory: false,
+            azure: false
+        };
+        
+        // 检查各服务状态
+        try {
+            if (this.speechProviders.whisper.url) {
+                await axios.get(this.speechProviders.whisper.url.replace('/asr', '/health'), { timeout: 3000 });
+                status.whisper = true;
+            }
+        } catch (error) {
+            // Whisper不可用
         }
+        
+        try {
+            if (this.translationProviders.libre.url) {
+                await axios.post(this.translationProviders.libre.url, {
+                    q: 'test',
+                    source: 'en',
+                    target: 'zh',
+                    format: 'text'
+                }, { timeout: 3000 });
+                status.libre = true;
+            }
+        } catch (error) {
+            // LibreTranslate不可用
+        }
+        
+        return status;
     }
 }
 

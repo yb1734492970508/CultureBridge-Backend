@@ -3,7 +3,6 @@ const ChatMessage = require('../models/ChatMessage');
 const VoiceTranslation = require('../models/VoiceTranslation');
 const TokenRewardService = require('../services/tokenRewardService');
 const VoiceTranslationService = require('../services/voiceTranslationService');
-const EnhancedBlockchainService = require('../services/enhancedBlockchainService');
 
 class EnhancedSocketService {
     constructor(server) {
@@ -13,84 +12,82 @@ class EnhancedSocketService {
                 methods: ["GET", "POST"],
                 credentials: true
             },
-            transports: ['websocket', 'polling']
+            transports: ['websocket', 'polling'],
+            pingTimeout: 60000,
+            pingInterval: 25000
         });
         
+        // 连接管理
         this.connectedUsers = new Map(); // userId -> socketId
         this.userSockets = new Map(); // socketId -> userInfo
         this.roomMembers = new Map(); // roomId -> Set of userIds
-        this.activeConversations = new Map(); // roomId -> conversation data
-        this.culturalExchangeMetrics = new Map(); // userId -> metrics
+        this.typingUsers = new Map(); // roomId -> Set of userIds
+        this.voiceStreams = new Map(); // socketId -> streamInfo
         
+        // 服务实例
         this.tokenRewardService = new TokenRewardService();
         this.voiceService = new VoiceTranslationService();
-        this.blockchainService = new EnhancedBlockchainService();
+        
+        // 统计信息
+        this.stats = {
+            totalConnections: 0,
+            activeRooms: 0,
+            messagesCount: 0,
+            voiceTranslations: 0
+        };
         
         this.initializeSocketHandlers();
-        this.startMetricsCollection();
+        this.startStatsReporting();
     }
     
     initializeSocketHandlers() {
         this.io.on('connection', (socket) => {
-            console.log(`用户连接: ${socket.id}`);
+            this.stats.totalConnections++;
+            console.log(`新用户连接: ${socket.id} (总连接数: ${this.io.engine.clientsCount})`);
             
             // 用户认证
             socket.on('authenticate', async (data) => {
                 try {
-                    const { userId, username, walletAddress } = data;
+                    const { userId, username, token } = data;
+                    
+                    // TODO: 验证JWT token
                     
                     // 存储用户信息
                     this.connectedUsers.set(userId, socket.id);
                     this.userSockets.set(socket.id, { 
                         userId, 
                         username, 
-                        walletAddress,
-                        joinTime: new Date(),
+                        connectedAt: new Date(),
                         lastActivity: new Date()
                     });
                     
                     socket.userId = userId;
                     socket.username = username;
-                    socket.walletAddress = walletAddress;
                     
-                    // 初始化用户文化交流指标
-                    if (!this.culturalExchangeMetrics.has(userId)) {
-                        this.culturalExchangeMetrics.set(userId, {
-                            messagesCount: 0,
-                            languagesUsed: new Set(),
-                            culturalTopics: new Set(),
-                            qualityScore: 0,
-                            rewardsEarned: 0,
-                            lastRewardTime: null
-                        });
-                    }
-                    
-                    // 加入用户个人房间（用于私聊）
+                    // 加入用户个人房间（用于私聊和通知）
                     socket.join(`user_${userId}`);
-                    
-                    // 获取用户CBT余额
-                    let cbtBalance = '0';
-                    if (walletAddress) {
-                        try {
-                            cbtBalance = await this.blockchainService.getCBTBalance(walletAddress);
-                        } catch (error) {
-                            console.error('获取CBT余额失败:', error);
-                        }
-                    }
                     
                     // 通知认证成功
                     socket.emit('authenticated', {
                         success: true,
                         message: '认证成功',
-                        cbtBalance,
-                        metrics: this.culturalExchangeMetrics.get(userId)
+                        userId,
+                        username
                     });
                     
-                    console.log(`用户 ${username} (${userId}) 已认证`);
+                    // 广播用户上线状态
+                    socket.broadcast.emit('user:online', {
+                        userId,
+                        username,
+                        timestamp: new Date()
+                    });
+                    
+                    console.log(`用户 ${username} (${userId}) 已认证并上线`);
                 } catch (error) {
+                    console.error('用户认证失败:', error);
                     socket.emit('authenticated', {
                         success: false,
-                        message: '认证失败'
+                        message: '认证失败: ' + error.message
                     });
                 }
             });
@@ -98,7 +95,7 @@ class EnhancedSocketService {
             // 加入聊天室
             socket.on('chat:join', async (data) => {
                 try {
-                    const { roomId, language = 'zh' } = data;
+                    const { roomId, password } = data;
                     const userId = socket.userId;
                     
                     if (!userId) {
@@ -106,15 +103,19 @@ class EnhancedSocketService {
                         return;
                     }
                     
-                    // 验证用户是否有权限加入房间
-                    const room = await ChatRoom.findById(roomId);
+                    // 验证聊天室
+                    const room = await ChatRoom.findById(roomId)
+                        .populate('members.user', 'username')
+                        .populate('creator', 'username');
+                    
                     if (!room) {
                         socket.emit('error', { message: '聊天室不存在' });
                         return;
                     }
                     
+                    // 检查权限
                     const isMember = room.members.some(member => 
-                        member.user.toString() === userId
+                        member.user._id.toString() === userId
                     );
                     
                     if (!isMember && room.type === 'private') {
@@ -122,58 +123,73 @@ class EnhancedSocketService {
                         return;
                     }
                     
+                    // 检查密码（如果需要）
+                    if (room.password && room.password !== password) {
+                        socket.emit('error', { message: '聊天室密码错误' });
+                        return;
+                    }
+                    
                     // 加入Socket.io房间
                     socket.join(roomId);
-                    socket.currentRoom = roomId;
-                    socket.preferredLanguage = language;
                     
                     // 更新房间成员列表
                     if (!this.roomMembers.has(roomId)) {
                         this.roomMembers.set(roomId, new Set());
+                        this.stats.activeRooms++;
                     }
                     this.roomMembers.get(roomId).add(userId);
                     
-                    // 初始化房间对话数据
-                    if (!this.activeConversations.has(roomId)) {
-                        this.activeConversations.set(roomId, {
-                            startTime: new Date(),
-                            participants: new Set(),
-                            messageCount: 0,
-                            languagesUsed: new Set(),
-                            culturalTopics: new Set(),
-                            qualityMetrics: {
-                                averageLength: 0,
-                                languageDiversity: 0,
-                                culturalDepth: 0
-                            }
+                    // 如果不是成员，自动加入
+                    if (!isMember && room.type === 'public') {
+                        room.members.push({
+                            user: userId,
+                            joinedAt: new Date(),
+                            role: 'member'
                         });
+                        await room.save();
                     }
-                    
-                    const conversation = this.activeConversations.get(roomId);
-                    conversation.participants.add(userId);
-                    conversation.languagesUsed.add(language);
                     
                     // 通知房间其他成员
                     socket.to(roomId).emit('user:joined', {
                         userId,
                         username: socket.username,
-                        language,
                         timestamp: new Date()
                     });
+                    
+                    // 获取最近消息
+                    const recentMessages = await ChatMessage.find({ chatRoom: roomId })
+                        .populate('sender', 'username')
+                        .sort({ createdAt: -1 })
+                        .limit(50);
                     
                     // 发送房间信息给用户
                     socket.emit('chat:joined', {
                         roomId,
-                        roomName: room.name,
-                        memberCount: this.roomMembers.get(roomId).size,
-                        activeLanguages: Array.from(conversation.languagesUsed),
-                        culturalTopics: Array.from(conversation.culturalTopics)
+                        roomInfo: {
+                            name: room.name,
+                            description: room.description,
+                            type: room.type,
+                            creator: room.creator.username,
+                            memberCount: this.roomMembers.get(roomId).size,
+                            totalMembers: room.members.length
+                        },
+                        recentMessages: recentMessages.reverse().map(msg => ({
+                            id: msg._id,
+                            sender: {
+                                id: msg.sender._id,
+                                username: msg.sender.username
+                            },
+                            content: msg.content,
+                            messageType: msg.messageType,
+                            translations: msg.translations,
+                            timestamp: msg.createdAt
+                        }))
                     });
                     
                     console.log(`用户 ${socket.username} 加入房间 ${room.name}`);
                 } catch (error) {
                     console.error('加入聊天室失败:', error);
-                    socket.emit('error', { message: '加入聊天室失败' });
+                    socket.emit('error', { message: '加入聊天室失败: ' + error.message });
                 }
             });
             
@@ -183,14 +199,20 @@ class EnhancedSocketService {
                 const userId = socket.userId;
                 
                 socket.leave(roomId);
-                socket.currentRoom = null;
                 
                 if (this.roomMembers.has(roomId)) {
                     this.roomMembers.get(roomId).delete(userId);
+                    
+                    // 如果房间没有人了，清理房间
+                    if (this.roomMembers.get(roomId).size === 0) {
+                        this.roomMembers.delete(roomId);
+                        this.stats.activeRooms--;
+                    }
                 }
                 
-                if (this.activeConversations.has(roomId)) {
-                    this.activeConversations.get(roomId).participants.delete(userId);
+                // 清理输入状态
+                if (this.typingUsers.has(roomId)) {
+                    this.typingUsers.get(roomId).delete(userId);
                 }
                 
                 socket.to(roomId).emit('user:left', {
@@ -198,19 +220,14 @@ class EnhancedSocketService {
                     username: socket.username,
                     timestamp: new Date()
                 });
+                
+                console.log(`用户 ${socket.username} 离开房间 ${roomId}`);
             });
             
             // 发送文本消息
             socket.on('chat:message', async (data) => {
                 try {
-                    const { 
-                        roomId, 
-                        content, 
-                        replyTo, 
-                        messageType = 'text',
-                        language = 'zh',
-                        culturalContext = null
-                    } = data;
+                    const { roomId, content, replyTo, messageType = 'text', targetLanguages } = data;
                     const userId = socket.userId;
                     
                     if (!userId) {
@@ -219,10 +236,7 @@ class EnhancedSocketService {
                     }
                     
                     // 更新用户活动时间
-                    const userInfo = this.userSockets.get(socket.id);
-                    if (userInfo) {
-                        userInfo.lastActivity = new Date();
-                    }
+                    this.updateUserActivity(socket.id);
                     
                     // 创建消息记录
                     const message = new ChatMessage({
@@ -230,59 +244,69 @@ class EnhancedSocketService {
                         sender: userId,
                         content,
                         messageType,
-                        language,
-                        culturalContext,
-                        replyTo,
-                        timestamp: new Date()
+                        replyTo: replyTo || undefined,
+                        originalLanguage: data.language || 'zh'
                     });
                     
+                    // 如果需要翻译
+                    if (targetLanguages && targetLanguages.length > 0) {
+                        try {
+                            const translations = await this.voiceService.translateText(
+                                content,
+                                data.language || 'auto',
+                                targetLanguages
+                            );
+                            
+                            message.translations = translations.map(t => ({
+                                language: t.language,
+                                content: t.text,
+                                confidence: t.confidence || 0.9
+                            }));
+                        } catch (error) {
+                            console.warn('文本翻译失败:', error);
+                        }
+                    }
+                    
                     await message.save();
+                    await message.populate('sender', 'username');
                     
-                    // 更新对话指标
-                    this.updateConversationMetrics(roomId, content, language, culturalContext);
-                    
-                    // 更新用户文化交流指标
-                    this.updateUserMetrics(userId, content, language, culturalContext);
-                    
-                    // 计算消息质量分数
-                    const qualityScore = this.calculateMessageQuality(content, language, culturalContext);
+                    this.stats.messagesCount++;
                     
                     // 广播消息到房间
-                    const messageData = {
+                    this.io.to(roomId).emit('chat:message', {
                         messageId: message._id,
-                        userId,
-                        username: socket.username,
-                        content,
-                        messageType,
-                        language,
-                        culturalContext,
-                        qualityScore,
-                        timestamp: message.timestamp,
-                        replyTo
-                    };
+                        sender: {
+                            id: message.sender._id,
+                            username: message.sender.username
+                        },
+                        content: message.content,
+                        messageType: message.messageType,
+                        replyTo: message.replyTo,
+                        translations: message.translations,
+                        timestamp: message.createdAt
+                    });
                     
-                    this.io.to(roomId).emit('chat:message', messageData);
+                    // 奖励代币（发送消息）
+                    try {
+                        await this.tokenRewardService.rewardCommunityContribution(
+                            'comment_creation',
+                            userId,
+                            { contentType: 'chat_message' }
+                        );
+                    } catch (error) {
+                        console.warn('奖励代币失败:', error);
+                    }
                     
-                    // 检查是否应该奖励CBT代币
-                    await this.checkAndRewardCBT(userId, qualityScore, language, culturalContext);
-                    
-                    console.log(`消息发送: ${socket.username} -> ${roomId}`);
                 } catch (error) {
                     console.error('发送消息失败:', error);
-                    socket.emit('error', { message: '发送消息失败' });
+                    socket.emit('error', { message: '发送消息失败: ' + error.message });
                 }
             });
             
             // 语音消息处理
-            socket.on('chat:voice', async (data) => {
+            socket.on('voice:message', async (data) => {
                 try {
-                    const { 
-                        roomId, 
-                        audioData, 
-                        sourceLanguage = 'zh',
-                        targetLanguage = 'en',
-                        culturalContext = null
-                    } = data;
+                    const { roomId, audioData, targetLanguages, sourceLanguage = 'auto' } = data;
                     const userId = socket.userId;
                     
                     if (!userId) {
@@ -290,390 +314,441 @@ class EnhancedSocketService {
                         return;
                     }
                     
+                    this.updateUserActivity(socket.id);
+                    
+                    // 通知开始处理
+                    socket.emit('voice:processing', {
+                        message: '正在处理语音消息...',
+                        progress: 0
+                    });
+                    
                     // 处理语音翻译
-                    const translationResult = await this.voiceService.processVoiceMessage({
-                        audioData,
+                    const audioBuffer = Buffer.from(audioData, 'base64');
+                    
+                    // 进度更新
+                    socket.emit('voice:processing', {
+                        message: '正在识别语音...',
+                        progress: 30
+                    });
+                    
+                    const result = await this.voiceService.processVoiceMessage(
+                        audioBuffer,
                         sourceLanguage,
-                        targetLanguage,
+                        targetLanguages || ['en', 'zh'],
                         userId,
                         roomId
+                    );
+                    
+                    socket.emit('voice:processing', {
+                        message: '正在翻译...',
+                        progress: 70
                     });
                     
-                    if (translationResult.success) {
-                        // 创建语音消息记录
-                        const message = new ChatMessage({
-                            chatRoom: roomId,
-                            sender: userId,
-                            content: translationResult.originalText,
-                            messageType: 'voice',
-                            language: sourceLanguage,
-                            culturalContext,
-                            voiceData: {
-                                originalAudio: translationResult.originalAudioUrl,
-                                translatedText: translationResult.translatedText,
-                                translatedAudio: translationResult.translatedAudioUrl,
-                                targetLanguage
-                            },
-                            timestamp: new Date()
-                        });
-                        
-                        await message.save();
-                        
-                        // 更新指标
-                        this.updateConversationMetrics(roomId, translationResult.originalText, sourceLanguage, culturalContext);
-                        this.updateUserMetrics(userId, translationResult.originalText, sourceLanguage, culturalContext);
-                        
-                        // 计算质量分数（语音消息有额外加分）
-                        const qualityScore = this.calculateMessageQuality(
-                            translationResult.originalText, 
-                            sourceLanguage, 
-                            culturalContext,
-                            true // 语音消息标识
-                        );
-                        
-                        // 广播语音消息
-                        const messageData = {
-                            messageId: message._id,
+                    // 创建语音消息记录
+                    const message = new ChatMessage({
+                        chatRoom: roomId,
+                        sender: userId,
+                        content: result.data.originalText,
+                        messageType: 'voice',
+                        originalLanguage: result.data.originalLanguage,
+                        translations: result.data.translations.map(t => ({
+                            language: t.language,
+                            content: t.text,
+                            confidence: t.confidence
+                        })),
+                        voiceData: {
+                            transcription: result.data.originalText,
+                            originalAudioUrl: result.data.audioUrl || null,
+                            duration: result.data.duration || 0
+                        }
+                    });
+                    
+                    await message.save();
+                    await message.populate('sender', 'username');
+                    
+                    this.stats.messagesCount++;
+                    this.stats.voiceTranslations++;
+                    
+                    socket.emit('voice:processing', {
+                        message: '处理完成',
+                        progress: 100
+                    });
+                    
+                    // 广播语音消息到房间
+                    this.io.to(roomId).emit('voice:message', {
+                        messageId: message._id,
+                        sender: {
+                            id: message.sender._id,
+                            username: message.sender.username
+                        },
+                        originalText: result.data.originalText,
+                        originalLanguage: result.data.originalLanguage,
+                        translations: result.data.translations,
+                        confidence: result.data.confidence,
+                        audioUrl: result.data.audioUrl,
+                        duration: result.data.duration,
+                        timestamp: message.createdAt
+                    });
+                    
+                    // 奖励代币（语音翻译）
+                    try {
+                        await this.tokenRewardService.rewardCommunityContribution(
+                            'helpful_content',
                             userId,
-                            username: socket.username,
-                            content: translationResult.originalText,
-                            messageType: 'voice',
-                            language: sourceLanguage,
-                            culturalContext,
-                            qualityScore,
-                            voiceData: message.voiceData,
-                            timestamp: message.timestamp
-                        };
-                        
-                        this.io.to(roomId).emit('chat:voice', messageData);
-                        
-                        // 语音消息有更高的CBT奖励
-                        await this.checkAndRewardCBT(userId, qualityScore * 1.5, sourceLanguage, culturalContext);
-                        
-                        console.log(`语音消息发送: ${socket.username} -> ${roomId}`);
-                    } else {
-                        socket.emit('error', { message: '语音处理失败' });
+                            { contentType: 'voice_translation' }
+                        );
+                    } catch (error) {
+                        console.warn('奖励代币失败:', error);
                     }
+                    
                 } catch (error) {
                     console.error('处理语音消息失败:', error);
-                    socket.emit('error', { message: '处理语音消息失败' });
+                    socket.emit('voice:error', {
+                        message: '语音处理失败: ' + error.message
+                    });
                 }
             });
             
-            // 实时翻译请求
-            socket.on('translate:request', async (data) => {
-                try {
-                    const { text, sourceLanguage, targetLanguage } = data;
-                    
-                    const translationResult = await this.voiceService.translateText({
-                        text,
-                        sourceLanguage,
-                        targetLanguage
-                    });
-                    
-                    socket.emit('translate:response', {
-                        originalText: text,
-                        translatedText: translationResult.translatedText,
-                        sourceLanguage,
-                        targetLanguage,
-                        confidence: translationResult.confidence
-                    });
-                } catch (error) {
-                    console.error('翻译失败:', error);
-                    socket.emit('translate:error', { message: '翻译失败' });
+            // 实时语音翻译流
+            socket.on('voice:stream:start', (data) => {
+                const { roomId, targetLanguage, sourceLanguage = 'auto' } = data;
+                
+                this.voiceStreams.set(socket.id, {
+                    roomId,
+                    targetLanguage,
+                    sourceLanguage,
+                    audioChunks: [],
+                    startTime: Date.now()
+                });
+                
+                socket.emit('voice:stream:ready', {
+                    message: '准备接收语音流',
+                    sessionId: socket.id
+                });
+                
+                console.log(`用户 ${socket.username} 开始语音流 (${sourceLanguage} -> ${targetLanguage})`);
+            });
+            
+            socket.on('voice:stream:chunk', (data) => {
+                const stream = this.voiceStreams.get(socket.id);
+                if (stream) {
+                    stream.audioChunks.push(Buffer.from(data.chunk, 'base64'));
+                    stream.lastChunkTime = Date.now();
                 }
             });
             
-            // 文化话题建议
-            socket.on('culture:suggest', async (data) => {
-                try {
-                    const { userLanguage, targetLanguage, interests = [] } = data;
+            socket.on('voice:stream:end', async () => {
+                const stream = this.voiceStreams.get(socket.id);
+                if (stream) {
+                    try {
+                        // 合并音频块
+                        const audioBuffer = Buffer.concat(stream.audioChunks);
+                        const duration = (Date.now() - stream.startTime) / 1000;
+                        
+                        if (audioBuffer.length > 0) {
+                            // 处理语音翻译
+                            const result = await this.voiceService.processVoiceMessage(
+                                audioBuffer,
+                                stream.sourceLanguage,
+                                [stream.targetLanguage],
+                                socket.userId,
+                                stream.roomId
+                            );
+                            
+                            // 发送结果到房间
+                            this.io.to(stream.roomId).emit('voice:stream:result', {
+                                originalText: result.data.originalText,
+                                translatedText: result.data.translations[0]?.text,
+                                confidence: result.data.confidence,
+                                duration,
+                                sender: {
+                                    id: socket.userId,
+                                    username: socket.username
+                                },
+                                timestamp: new Date()
+                            });
+                            
+                            this.stats.voiceTranslations++;
+                        }
+                        
+                    } catch (error) {
+                        console.error('实时翻译失败:', error);
+                        socket.emit('voice:stream:error', {
+                            message: '实时翻译失败: ' + error.message
+                        });
+                    }
                     
-                    const suggestions = await this.generateCulturalTopics(userLanguage, targetLanguage, interests);
-                    
-                    socket.emit('culture:suggestions', {
-                        topics: suggestions,
-                        timestamp: new Date()
-                    });
-                } catch (error) {
-                    console.error('生成文化话题失败:', error);
-                    socket.emit('error', { message: '生成文化话题失败' });
+                    this.voiceStreams.delete(socket.id);
+                    console.log(`用户 ${socket.username} 结束语音流`);
                 }
             });
             
-            // 用户断开连接
-            socket.on('disconnect', () => {
+            // 输入状态
+            socket.on('chat:typing', (data) => {
+                const { roomId, isTyping } = data;
                 const userId = socket.userId;
                 
                 if (userId) {
-                    this.connectedUsers.delete(userId);
+                    if (!this.typingUsers.has(roomId)) {
+                        this.typingUsers.set(roomId, new Set());
+                    }
                     
-                    // 从所有房间移除用户
+                    if (isTyping) {
+                        this.typingUsers.get(roomId).add(userId);
+                    } else {
+                        this.typingUsers.get(roomId).delete(userId);
+                    }
+                    
+                    socket.to(roomId).emit('chat:typing', {
+                        userId,
+                        username: socket.username,
+                        isTyping,
+                        timestamp: new Date()
+                    });
+                    
+                    // 自动清理输入状态
+                    if (isTyping) {
+                        setTimeout(() => {
+                            if (this.typingUsers.has(roomId)) {
+                                this.typingUsers.get(roomId).delete(userId);
+                                socket.to(roomId).emit('chat:typing', {
+                                    userId,
+                                    username: socket.username,
+                                    isTyping: false,
+                                    timestamp: new Date()
+                                });
+                            }
+                        }, 5000);
+                    }
+                }
+            });
+            
+            // 用户状态更新
+            socket.on('user:status', (data) => {
+                const { status } = data; // 'online', 'away', 'busy', 'invisible'
+                const userId = socket.userId;
+                
+                if (userId) {
+                    const userInfo = this.userSockets.get(socket.id);
+                    if (userInfo) {
+                        userInfo.status = status;
+                        userInfo.lastActivity = new Date();
+                    }
+                    
+                    // 广播状态更新
+                    socket.broadcast.emit('user:status', {
+                        userId,
+                        username: socket.username,
+                        status,
+                        timestamp: new Date()
+                    });
+                }
+            });
+            
+            // 私聊消息
+            socket.on('private:message', async (data) => {
+                try {
+                    const { targetUserId, content, messageType = 'text' } = data;
+                    const senderId = socket.userId;
+                    
+                    if (!senderId) {
+                        socket.emit('error', { message: '请先认证' });
+                        return;
+                    }
+                    
+                    // 创建或获取私聊房间
+                    let privateRoom = await ChatRoom.findOne({
+                        type: 'private',
+                        'members.user': { $all: [senderId, targetUserId] }
+                    });
+                    
+                    if (!privateRoom) {
+                        privateRoom = new ChatRoom({
+                            name: `私聊_${senderId}_${targetUserId}`,
+                            type: 'private',
+                            creator: senderId,
+                            members: [
+                                { user: senderId, role: 'admin' },
+                                { user: targetUserId, role: 'member' }
+                            ]
+                        });
+                        await privateRoom.save();
+                    }
+                    
+                    // 创建消息
+                    const message = new ChatMessage({
+                        chatRoom: privateRoom._id,
+                        sender: senderId,
+                        content,
+                        messageType
+                    });
+                    
+                    await message.save();
+                    await message.populate('sender', 'username');
+                    
+                    // 发送给双方
+                    const messageData = {
+                        messageId: message._id,
+                        roomId: privateRoom._id,
+                        sender: {
+                            id: message.sender._id,
+                            username: message.sender.username
+                        },
+                        content: message.content,
+                        messageType: message.messageType,
+                        timestamp: message.createdAt
+                    };
+                    
+                    socket.emit('private:message', messageData);
+                    this.io.to(`user_${targetUserId}`).emit('private:message', messageData);
+                    
+                } catch (error) {
+                    console.error('发送私聊消息失败:', error);
+                    socket.emit('error', { message: '发送私聊消息失败' });
+                }
+            });
+            
+            // 获取在线用户列表
+            socket.on('users:online', () => {
+                const onlineUsers = Array.from(this.userSockets.values())
+                    .filter(user => user.status !== 'invisible')
+                    .map(user => ({
+                        userId: user.userId,
+                        username: user.username,
+                        status: user.status || 'online',
+                        lastActivity: user.lastActivity
+                    }));
+                
+                socket.emit('users:online', {
+                    users: onlineUsers,
+                    count: onlineUsers.length
+                });
+            });
+            
+            // 断开连接处理
+            socket.on('disconnect', (reason) => {
+                const userId = socket.userId;
+                const username = socket.username;
+                
+                if (userId) {
+                    // 清理连接记录
+                    this.connectedUsers.delete(userId);
+                    this.userSockets.delete(socket.id);
+                    
+                    // 清理房间成员
                     for (const [roomId, members] of this.roomMembers.entries()) {
                         if (members.has(userId)) {
                             members.delete(userId);
                             socket.to(roomId).emit('user:left', {
                                 userId,
-                                username: socket.username,
+                                username,
                                 timestamp: new Date()
                             });
+                            
+                            if (members.size === 0) {
+                                this.roomMembers.delete(roomId);
+                                this.stats.activeRooms--;
+                            }
                         }
                     }
                     
-                    // 从活跃对话中移除用户
-                    for (const [roomId, conversation] of this.activeConversations.entries()) {
-                        conversation.participants.delete(userId);
+                    // 清理输入状态
+                    for (const [roomId, typingUsers] of this.typingUsers.entries()) {
+                        typingUsers.delete(userId);
                     }
+                    
+                    // 清理语音流
+                    this.voiceStreams.delete(socket.id);
+                    
+                    // 广播用户离线状态
+                    socket.broadcast.emit('user:offline', {
+                        userId,
+                        username,
+                        timestamp: new Date()
+                    });
+                    
+                    console.log(`用户 ${username} (${userId}) 断开连接: ${reason}`);
+                } else {
+                    console.log(`未认证用户 ${socket.id} 断开连接: ${reason}`);
                 }
-                
-                this.userSockets.delete(socket.id);
-                console.log(`用户断开连接: ${socket.id}`);
             });
         });
     }
     
-    /**
-     * 更新对话指标
-     */
-    updateConversationMetrics(roomId, content, language, culturalContext) {
-        if (!this.activeConversations.has(roomId)) return;
-        
-        const conversation = this.activeConversations.get(roomId);
-        conversation.messageCount++;
-        conversation.languagesUsed.add(language);
-        
-        if (culturalContext) {
-            conversation.culturalTopics.add(culturalContext);
-        }
-        
-        // 更新质量指标
-        const metrics = conversation.qualityMetrics;
-        metrics.averageLength = (metrics.averageLength * (conversation.messageCount - 1) + content.length) / conversation.messageCount;
-        metrics.languageDiversity = conversation.languagesUsed.size;
-        metrics.culturalDepth = conversation.culturalTopics.size;
-    }
-    
-    /**
-     * 更新用户指标
-     */
-    updateUserMetrics(userId, content, language, culturalContext) {
-        if (!this.culturalExchangeMetrics.has(userId)) return;
-        
-        const metrics = this.culturalExchangeMetrics.get(userId);
-        metrics.messagesCount++;
-        metrics.languagesUsed.add(language);
-        
-        if (culturalContext) {
-            metrics.culturalTopics.add(culturalContext);
-        }
-        
-        // 更新质量分数
-        const messageQuality = this.calculateMessageQuality(content, language, culturalContext);
-        metrics.qualityScore = (metrics.qualityScore * (metrics.messagesCount - 1) + messageQuality) / metrics.messagesCount;
-    }
-    
-    /**
-     * 计算消息质量分数
-     */
-    calculateMessageQuality(content, language, culturalContext, isVoice = false) {
-        let score = 0;
-        
-        // 基础分数（基于内容长度）
-        score += Math.min(content.length / 10, 10);
-        
-        // 语言多样性加分
-        if (language !== 'zh') {
-            score += 5;
-        }
-        
-        // 文化内容加分
-        if (culturalContext) {
-            score += 10;
-        }
-        
-        // 语音消息加分
-        if (isVoice) {
-            score += 5;
-        }
-        
-        // 内容质量检测（简化版）
-        const culturalKeywords = ['文化', '传统', '习俗', 'culture', 'tradition', 'custom'];
-        const hasCulturalContent = culturalKeywords.some(keyword => 
-            content.toLowerCase().includes(keyword.toLowerCase())
-        );
-        
-        if (hasCulturalContent) {
-            score += 8;
-        }
-        
-        return Math.min(score, 50); // 最高50分
-    }
-    
-    /**
-     * 检查并奖励CBT代币
-     */
-    async checkAndRewardCBT(userId, qualityScore, language, culturalContext) {
-        try {
-            const metrics = this.culturalExchangeMetrics.get(userId);
-            if (!metrics) return;
-            
-            // 奖励条件检查
-            const shouldReward = (
-                qualityScore >= 20 && // 质量分数达到20分
-                (!metrics.lastRewardTime || 
-                 Date.now() - metrics.lastRewardTime > 300000) // 5分钟冷却时间
-            );
-            
-            if (shouldReward) {
-                const userInfo = Array.from(this.userSockets.values())
-                    .find(user => user.userId === userId);
-                
-                if (userInfo && userInfo.walletAddress) {
-                    // 计算奖励数量
-                    let rewardAmount = qualityScore / 10; // 基础奖励
-                    
-                    // 语言多样性奖励
-                    if (language !== 'zh') {
-                        rewardAmount *= 1.2;
-                    }
-                    
-                    // 文化内容奖励
-                    if (culturalContext) {
-                        rewardAmount *= 1.3;
-                    }
-                    
-                    // 发放CBT奖励
-                    const txHash = await this.blockchainService.awardCBTTokens(
-                        userInfo.walletAddress,
-                        rewardAmount.toFixed(4),
-                        `文化交流奖励 - 质量分数: ${qualityScore}`
-                    );
-                    
-                    // 更新用户指标
-                    metrics.rewardsEarned += parseFloat(rewardAmount.toFixed(4));
-                    metrics.lastRewardTime = Date.now();
-                    
-                    // 通知用户获得奖励
-                    const socketId = this.connectedUsers.get(userId);
-                    if (socketId) {
-                        this.io.to(socketId).emit('reward:earned', {
-                            amount: rewardAmount.toFixed(4),
-                            reason: '文化交流奖励',
-                            qualityScore,
-                            txHash,
-                            timestamp: new Date()
-                        });
-                    }
-                    
-                    console.log(`CBT奖励发放: 用户${userId} 获得 ${rewardAmount.toFixed(4)} CBT`);
-                }
-            }
-        } catch (error) {
-            console.error('CBT奖励发放失败:', error);
+    // 更新用户活动时间
+    updateUserActivity(socketId) {
+        const userInfo = this.userSockets.get(socketId);
+        if (userInfo) {
+            userInfo.lastActivity = new Date();
         }
     }
     
-    /**
-     * 生成文化话题建议
-     */
-    async generateCulturalTopics(userLanguage, targetLanguage, interests) {
-        const topics = [
-            {
-                title: '传统节日对比',
-                description: '比较不同文化的传统节日和庆祝方式',
-                keywords: ['节日', '传统', '庆祝'],
-                difficulty: 'beginner'
-            },
-            {
-                title: '饮食文化探索',
-                description: '分享各自国家的特色美食和饮食习惯',
-                keywords: ['美食', '饮食', '文化'],
-                difficulty: 'beginner'
-            },
-            {
-                title: '教育体系差异',
-                description: '讨论不同国家的教育制度和学习方式',
-                keywords: ['教育', '学习', '制度'],
-                difficulty: 'intermediate'
-            },
-            {
-                title: '商务礼仪文化',
-                description: '交流商务场合的礼仪和沟通方式',
-                keywords: ['商务', '礼仪', '沟通'],
-                difficulty: 'advanced'
-            }
-        ];
-        
-        // 根据用户兴趣过滤话题
-        if (interests.length > 0) {
-            return topics.filter(topic => 
-                topic.keywords.some(keyword => 
-                    interests.some(interest => 
-                        interest.toLowerCase().includes(keyword.toLowerCase())
-                    )
-                )
-            );
-        }
-        
-        return topics;
+    // 获取在线用户数量
+    getOnlineUserCount() {
+        return this.connectedUsers.size;
     }
     
-    /**
-     * 开始指标收集
-     */
-    startMetricsCollection() {
-        // 每5分钟收集一次指标
-        setInterval(() => {
-            this.collectAndBroadcastMetrics();
-        }, 300000);
+    // 获取活跃房间数量
+    getActiveRoomCount() {
+        return this.roomMembers.size;
     }
     
-    /**
-     * 收集并广播指标
-     */
-    collectAndBroadcastMetrics() {
-        const globalMetrics = {
-            totalUsers: this.connectedUsers.size,
-            activeRooms: this.roomMembers.size,
-            totalMessages: Array.from(this.activeConversations.values())
-                .reduce((sum, conv) => sum + conv.messageCount, 0),
-            languageDiversity: new Set(
-                Array.from(this.activeConversations.values())
-                    .flatMap(conv => Array.from(conv.languagesUsed))
-            ).size,
+    // 获取统计信息
+    getStats() {
+        return {
+            ...this.stats,
+            onlineUsers: this.getOnlineUserCount(),
+            activeRooms: this.getActiveRoomCount(),
+            totalSockets: this.io.engine.clientsCount
+        };
+    }
+    
+    // 发送系统通知
+    sendSystemNotification(userId, notification) {
+        this.io.to(`user_${userId}`).emit('system:notification', {
+            ...notification,
             timestamp: new Date()
+        });
+    }
+    
+    // 广播系统消息
+    broadcastSystemMessage(message, roomId = null) {
+        const data = {
+            message,
+            timestamp: new Date(),
+            type: 'system'
         };
         
-        // 广播全局指标
-        this.io.emit('metrics:global', globalMetrics);
-        
-        console.log('全局指标:', globalMetrics);
-    }
-    
-    /**
-     * 获取用户指标
-     */
-    getUserMetrics(userId) {
-        return this.culturalExchangeMetrics.get(userId) || null;
-    }
-    
-    /**
-     * 获取房间指标
-     */
-    getRoomMetrics(roomId) {
-        return this.activeConversations.get(roomId) || null;
-    }
-    
-    /**
-     * 关闭服务
-     */
-    async close() {
-        if (this.blockchainService) {
-            await this.blockchainService.close();
+        if (roomId) {
+            this.io.to(roomId).emit('system:message', data);
+        } else {
+            this.io.emit('system:message', data);
         }
+    }
+    
+    // 启动统计报告
+    startStatsReporting() {
+        setInterval(() => {
+            const stats = this.getStats();
+            console.log(`[Socket统计] 在线用户: ${stats.onlineUsers}, 活跃房间: ${stats.activeRooms}, 总消息: ${stats.messagesCount}, 语音翻译: ${stats.voiceTranslations}`);
+            
+            // 发送统计信息给管理员
+            this.io.emit('admin:stats', stats);
+        }, 60000); // 每分钟报告一次
+    }
+    
+    // 清理非活跃连接
+    cleanupInactiveConnections() {
+        const now = Date.now();
+        const inactiveThreshold = 30 * 60 * 1000; // 30分钟
         
-        if (this.io) {
-            this.io.close();
+        for (const [socketId, userInfo] of this.userSockets.entries()) {
+            if (now - userInfo.lastActivity.getTime() > inactiveThreshold) {
+                const socket = this.io.sockets.sockets.get(socketId);
+                if (socket) {
+                    socket.disconnect(true);
+                }
+            }
         }
     }
 }

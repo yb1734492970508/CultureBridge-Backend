@@ -1,106 +1,121 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./CultureBridgeIdentity.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
- * @title CultureBridgeToken
- * @dev 管理平台代币和跨文化交易的智能合约
+ * @title CultureBridge Token (CBT)
+ * @dev ERC20代币合约，用于CultureBridge平台的文化交流和语言学习激励
  */
-contract CultureBridgeToken is ERC20, Ownable {
-    CultureBridgeIdentity private identityContract;
+contract CultureBridgeToken is ERC20, ERC20Burnable, Pausable, Ownable, ReentrancyGuard {
     
-    struct Transaction {
+    // 代币基本信息
+    uint256 public constant INITIAL_SUPPLY = 1000000000 * 10**18; // 10亿CBT
+    uint256 public constant MAX_SUPPLY = 10000000000 * 10**18; // 最大供应量100亿CBT
+    
+    // 交易计数器
+    uint256 private _transactionCounter;
+    
+    // 交易结构体
+    struct CulturalTransaction {
         uint256 id;
         address from;
         address to;
         uint256 amount;
         string purpose;
-        uint256 timestamp;
         string category;
         string[] tags;
+        uint256 timestamp;
+        bool isReward;
     }
     
-    // 交易ID到交易详情的映射
-    mapping(uint256 => Transaction) private transactions;
-    uint256 private transactionCount;
-    
-    // 用户地址到交易ID列表的映射
-    mapping(address => uint256[]) private userToTransactions;
-    
-    // 交易类别到交易ID列表的映射
-    mapping(string => uint256[]) private categoryToTransactions;
-    
-    // 交易标签到交易ID列表的映射
-    mapping(string => uint256[]) private tagToTransactions;
-    
-    // 用户地址到奖励历史的映射
-    struct RewardHistory {
-        uint256 timestamp;
+    // 用户奖励历史
+    struct UserReward {
         uint256 amount;
         string reason;
+        string category;
+        uint256 timestamp;
+        uint256 transactionId;
     }
-    mapping(address => RewardHistory[]) private rewardHistories;
     
-    // 通胀控制参数
-    uint256 public maxSupply = 1000000000 * 10**decimals(); // 10亿代币上限
-    uint256 public initialSupply = 100000000 * 10**decimals(); // 1亿初始供应量
-    uint256 public annualInflationRate = 5; // 5%年通胀率
-    uint256 public lastInflationUpdate;
+    // 存储所有交易
+    mapping(uint256 => CulturalTransaction) public transactions;
     
-    event CulturalTransaction(uint256 indexed id, address indexed from, address indexed to, uint256 amount, string purpose);
-    event TokensAwarded(address indexed to, uint256 amount, string reason);
-    event TokensBurned(address indexed from, uint256 amount);
-    event InflationApplied(uint256 amount, uint256 timestamp);
+    // 用户交易历史
+    mapping(address => uint256[]) public userTransactions;
+    
+    // 用户奖励历史
+    mapping(address => UserReward[]) public userRewards;
+    
+    // 类别统计
+    mapping(string => uint256) public categoryTotals;
+    
+    // 每日奖励限制
+    mapping(address => mapping(uint256 => uint256)) public dailyRewards;
+    uint256 public constant DAILY_REWARD_LIMIT = 100 * 10**18; // 每日最多奖励100 CBT
+    
+    // 管理员地址
+    mapping(address => bool) public administrators;
+    
+    // 事件定义
+    event CulturalTransaction(
+        uint256 indexed id,
+        address indexed from,
+        address indexed to,
+        uint256 amount,
+        string purpose,
+        string category
+    );
+    
+    event TokensAwarded(
+        address indexed recipient,
+        uint256 amount,
+        string reason,
+        string category
+    );
+    
+    event AdministratorAdded(address indexed admin);
+    event AdministratorRemoved(address indexed admin);
+    
+    // 修饰符
+    modifier onlyAdmin() {
+        require(administrators[msg.sender] || msg.sender == owner(), "Not authorized");
+        _;
+    }
+    
+    modifier validAddress(address _address) {
+        require(_address != address(0), "Invalid address");
+        _;
+    }
+    
+    constructor() ERC20("CultureBridge Token", "CBT") {
+        _mint(msg.sender, INITIAL_SUPPLY);
+        administrators[msg.sender] = true;
+        _transactionCounter = 0;
+    }
     
     /**
-     * @dev 构造函数
-     * @param _identityContractAddress 身份合约地址
+     * @dev 添加管理员
      */
-    constructor(address _identityContractAddress) ERC20("CultureBridge Token", "CBT") {
-        identityContract = CultureBridgeIdentity(_identityContractAddress);
-        
-        // 初始铸造代币给合约所有者
-        _mint(msg.sender, initialSupply);
-        lastInflationUpdate = block.timestamp;
+    function addAdministrator(address _admin) external onlyOwner validAddress(_admin) {
+        administrators[_admin] = true;
+        emit AdministratorAdded(_admin);
     }
     
     /**
-     * @dev 奖励代币给用户
-     * @param _to 接收者地址
-     * @param _amount 代币数量
-     * @param _reason 奖励原因
+     * @dev 移除管理员
      */
-    function awardTokens(address _to, uint256 _amount, string memory _reason) public onlyOwner {
-        // 检查用户是否已注册
-        (uint256 userId,,,,) = identityContract.getUserInfo(_to);
-        require(userId != 0, "User not registered");
-        
-        // 检查总供应量不超过上限
-        require(totalSupply() + _amount <= maxSupply, "Exceeds max supply");
-        
-        _mint(_to, _amount);
-        
-        // 记录奖励历史
-        rewardHistories[_to].push(RewardHistory({
-            timestamp: block.timestamp,
-            amount: _amount,
-            reason: _reason
-        }));
-        
-        emit TokensAwarded(_to, _amount, _reason);
+    function removeAdministrator(address _admin) external onlyOwner validAddress(_admin) {
+        administrators[_admin] = false;
+        emit AdministratorRemoved(_admin);
     }
     
     /**
-     * @dev 带有目的的代币转账
-     * @param _to 接收者地址
-     * @param _amount 代币数量
-     * @param _purpose 转账目的
-     * @param _category 交易类别
-     * @param _tags 交易标签数组
-     * @return 交易ID
+     * @dev 带目的的代币转账
      */
     function transferWithPurpose(
         address _to,
@@ -108,131 +123,120 @@ contract CultureBridgeToken is ERC20, Ownable {
         string memory _purpose,
         string memory _category,
         string[] memory _tags
-    ) public returns (uint256) {
-        // 检查发送者和接收者是否已注册
-        (uint256 fromId,,,,) = identityContract.getUserInfo(msg.sender);
-        (uint256 toId,,,,) = identityContract.getUserInfo(_to);
-        require(fromId != 0, "Sender not registered");
-        require(toId != 0, "Recipient not registered");
+    ) external whenNotPaused nonReentrant validAddress(_to) returns (uint256) {
+        require(_amount > 0, "Amount must be greater than 0");
+        require(bytes(_purpose).length > 0, "Purpose cannot be empty");
+        require(balanceOf(msg.sender) >= _amount, "Insufficient balance");
         
         // 执行转账
         _transfer(msg.sender, _to, _amount);
         
         // 记录交易
-        transactionCount++;
-        transactions[transactionCount] = Transaction({
-            id: transactionCount,
+        _transactionCounter++;
+        uint256 transactionId = _transactionCounter;
+        
+        transactions[transactionId] = CulturalTransaction({
+            id: transactionId,
             from: msg.sender,
             to: _to,
             amount: _amount,
             purpose: _purpose,
-            timestamp: block.timestamp,
             category: _category,
-            tags: _tags
+            tags: _tags,
+            timestamp: block.timestamp,
+            isReward: false
         });
         
-        // 更新索引映射
-        userToTransactions[msg.sender].push(transactionCount);
-        userToTransactions[_to].push(transactionCount);
-        categoryToTransactions[_category].push(transactionCount);
-        for (uint256 i = 0; i < _tags.length; i++) {
-            tagToTransactions[_tags[i]].push(transactionCount);
-        }
+        // 更新用户交易历史
+        userTransactions[msg.sender].push(transactionId);
+        userTransactions[_to].push(transactionId);
         
-        emit CulturalTransaction(transactionCount, msg.sender, _to, _amount, _purpose);
+        // 更新类别统计
+        categoryTotals[_category] += _amount;
         
-        return transactionCount;
+        emit CulturalTransaction(transactionId, msg.sender, _to, _amount, _purpose, _category);
+        
+        return transactionId;
     }
     
     /**
-     * @dev 批量转账代币
-     * @param _recipients 接收者地址数组
-     * @param _amounts 代币数量数组
-     * @param _purpose 转账目的
-     * @param _category 交易类别
-     * @param _tags 交易标签数组
-     * @return 交易ID数组
+     * @dev 奖励代币给用户
      */
-    function batchTransfer(
-        address[] memory _recipients,
-        uint256[] memory _amounts,
-        string memory _purpose,
-        string memory _category,
-        string[] memory _tags
-    ) public returns (uint256[] memory) {
-        require(_recipients.length == _amounts.length, "Arrays length mismatch");
+    function awardTokens(
+        address _to,
+        uint256 _amount,
+        string memory _reason,
+        string memory _category
+    ) external onlyAdmin whenNotPaused nonReentrant validAddress(_to) {
+        require(_amount > 0, "Amount must be greater than 0");
+        require(bytes(_reason).length > 0, "Reason cannot be empty");
         
-        uint256[] memory txIds = new uint256[](_recipients.length);
+        // 检查每日奖励限制
+        uint256 today = block.timestamp / 86400; // 获取当前日期
+        require(
+            dailyRewards[_to][today] + _amount <= DAILY_REWARD_LIMIT,
+            "Daily reward limit exceeded"
+        );
         
-        for (uint256 i = 0; i < _recipients.length; i++) {
-            txIds[i] = transferWithPurpose(_recipients[i], _amounts[i], _purpose, _category, _tags);
-        }
+        // 检查最大供应量
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Max supply exceeded");
         
-        return txIds;
+        // 铸造代币
+        _mint(_to, _amount);
+        
+        // 更新每日奖励记录
+        dailyRewards[_to][today] += _amount;
+        
+        // 记录交易
+        _transactionCounter++;
+        uint256 transactionId = _transactionCounter;
+        
+        transactions[transactionId] = CulturalTransaction({
+            id: transactionId,
+            from: address(0),
+            to: _to,
+            amount: _amount,
+            purpose: _reason,
+            category: _category,
+            tags: new string[](0),
+            timestamp: block.timestamp,
+            isReward: true
+        });
+        
+        // 记录用户奖励历史
+        userRewards[_to].push(UserReward({
+            amount: _amount,
+            reason: _reason,
+            category: _category,
+            timestamp: block.timestamp,
+            transactionId: transactionId
+        }));
+        
+        // 更新用户交易历史
+        userTransactions[_to].push(transactionId);
+        
+        // 更新类别统计
+        categoryTotals[_category] += _amount;
+        
+        emit TokensAwarded(_to, _amount, _reason, _category);
+        emit CulturalTransaction(transactionId, address(0), _to, _amount, _reason, _category);
     }
     
     /**
-     * @dev 燃烧代币
-     * @param _amount 代币数量
+     * @dev 获取交易详情
      */
-    function burn(uint256 _amount) public {
-        _burn(msg.sender, _amount);
-        emit TokensBurned(msg.sender, _amount);
-    }
-    
-    /**
-     * @dev 应用通胀
-     */
-    function applyInflation() public onlyOwner {
-        // 确保至少过去了一年
-        require(block.timestamp >= lastInflationUpdate + 365 days, "Inflation can only be applied annually");
-        
-        uint256 currentSupply = totalSupply();
-        uint256 inflationAmount = (currentSupply * annualInflationRate) / 100;
-        
-        // 确保不超过最大供应量
-        if (currentSupply + inflationAmount > maxSupply) {
-            inflationAmount = maxSupply - currentSupply;
-        }
-        
-        if (inflationAmount > 0) {
-            _mint(owner(), inflationAmount);
-            lastInflationUpdate = block.timestamp;
-            emit InflationApplied(inflationAmount, block.timestamp);
-        }
-    }
-    
-    /**
-     * @dev 设置年通胀率
-     * @param _rate 新的通胀率
-     */
-    function setInflationRate(uint256 _rate) public onlyOwner {
-        require(_rate <= 10, "Inflation rate cannot exceed 10%");
-        annualInflationRate = _rate;
-    }
-    
-    /**
-     * @dev 获取交易信息
-     * @param _id 交易ID
-     * @return id 交易ID
-     * @return from 发送者地址
-     * @return to 接收者地址
-     * @return amount 代币数量
-     * @return purpose 转账目的
-     * @return timestamp 时间戳
-     * @return category 交易类别
-     */
-    function getTransaction(uint256 _id) public view returns (
+    function getTransaction(uint256 _id) external view returns (
         uint256 id,
         address from,
         address to,
         uint256 amount,
         string memory purpose,
         uint256 timestamp,
-        string memory category
+        string memory category,
+        string[] memory tags,
+        bool isReward
     ) {
-        require(_id > 0 && _id <= transactionCount, "Transaction does not exist");
-        Transaction storage txn = transactions[_id];
+        CulturalTransaction memory txn = transactions[_id];
         return (
             txn.id,
             txn.from,
@@ -240,88 +244,111 @@ contract CultureBridgeToken is ERC20, Ownable {
             txn.amount,
             txn.purpose,
             txn.timestamp,
-            txn.category
+            txn.category,
+            txn.tags,
+            txn.isReward
         );
     }
     
     /**
-     * @dev 获取交易标签
-     * @param _id 交易ID
-     * @return 标签数组
+     * @dev 获取用户交易历史
      */
-    function getTransactionTags(uint256 _id) public view returns (string[] memory) {
-        require(_id > 0 && _id <= transactionCount, "Transaction does not exist");
-        return transactions[_id].tags;
+    function getUserTransactions(address _user) external view returns (uint256[] memory) {
+        return userTransactions[_user];
     }
     
     /**
-     * @dev 获取用户的交易
-     * @param _user 用户地址
-     * @return 交易ID数组
+     * @dev 获取用户奖励历史
      */
-    function getUserTransactions(address _user) public view returns (uint256[] memory) {
-        return userToTransactions[_user];
+    function getUserRewards(address _user) external view returns (UserReward[] memory) {
+        return userRewards[_user];
     }
     
     /**
-     * @dev 获取指定类别的交易
-     * @param _category 交易类别
-     * @return 交易ID数组
+     * @dev 获取用户今日已获得奖励
      */
-    function getTransactionsByCategory(string memory _category) public view returns (uint256[] memory) {
-        return categoryToTransactions[_category];
+    function getTodayRewards(address _user) external view returns (uint256) {
+        uint256 today = block.timestamp / 86400;
+        return dailyRewards[_user][today];
     }
     
     /**
-     * @dev 获取包含指定标签的交易
-     * @param _tag 交易标签
-     * @return 交易ID数组
+     * @dev 获取类别总量
      */
-    function getTransactionsByTag(string memory _tag) public view returns (uint256[] memory) {
-        return tagToTransactions[_tag];
-    }
-    
-    /**
-     * @dev 获取用户的奖励历史
-     * @param _user 用户地址
-     * @return timestamps 时间戳数组
-     * @return amounts 代币数量数组
-     * @return reasons 奖励原因数组
-     */
-    function getUserRewardHistory(address _user) public view returns (
-        uint256[] memory timestamps,
-        uint256[] memory amounts,
-        string[] memory reasons
-    ) {
-        RewardHistory[] storage history = rewardHistories[_user];
-        uint256 length = history.length;
-        
-        timestamps = new uint256[](length);
-        amounts = new uint256[](length);
-        reasons = new string[](length);
-        
-        for (uint256 i = 0; i < length; i++) {
-            timestamps[i] = history[i].timestamp;
-            amounts[i] = history[i].amount;
-            reasons[i] = history[i].reason;
-        }
-        
-        return (timestamps, amounts, reasons);
+    function getCategoryTotal(string memory _category) external view returns (uint256) {
+        return categoryTotals[_category];
     }
     
     /**
      * @dev 获取交易总数
-     * @return 交易总数
      */
-    function getTotalTransactions() public view returns (uint256) {
-        return transactionCount;
+    function getTransactionCount() external view returns (uint256) {
+        return _transactionCounter;
     }
     
     /**
-     * @dev 获取下一次通胀更新时间
-     * @return 下一次通胀更新时间
+     * @dev 批量奖励代币
      */
-    function getNextInflationUpdate() public view returns (uint256) {
-        return lastInflationUpdate + 365 days;
+    function batchAwardTokens(
+        address[] memory _recipients,
+        uint256[] memory _amounts,
+        string[] memory _reasons,
+        string memory _category
+    ) external onlyAdmin whenNotPaused nonReentrant {
+        require(_recipients.length == _amounts.length, "Arrays length mismatch");
+        require(_recipients.length == _reasons.length, "Arrays length mismatch");
+        require(_recipients.length > 0, "Empty arrays");
+        
+        for (uint256 i = 0; i < _recipients.length; i++) {
+            if (_recipients[i] != address(0) && _amounts[i] > 0) {
+                // 检查每日奖励限制
+                uint256 today = block.timestamp / 86400;
+                if (dailyRewards[_recipients[i]][today] + _amounts[i] <= DAILY_REWARD_LIMIT) {
+                    // 检查最大供应量
+                    if (totalSupply() + _amounts[i] <= MAX_SUPPLY) {
+                        _mint(_recipients[i], _amounts[i]);
+                        dailyRewards[_recipients[i]][today] += _amounts[i];
+                        
+                        // 记录奖励历史
+                        userRewards[_recipients[i]].push(UserReward({
+                            amount: _amounts[i],
+                            reason: _reasons[i],
+                            category: _category,
+                            timestamp: block.timestamp,
+                            transactionId: _transactionCounter + 1
+                        }));
+                        
+                        emit TokensAwarded(_recipients[i], _amounts[i], _reasons[i], _category);
+                    }
+                }
+            }
+        }
     }
+    
+    /**
+     * @dev 暂停合约
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+    
+    /**
+     * @dev 恢复合约
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+    
+    /**
+     * @dev 紧急提取BNB
+     */
+    function emergencyWithdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+    
+    /**
+     * @dev 接收BNB
+     */
+    receive() external payable {}
 }
+

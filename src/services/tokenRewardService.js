@@ -1,121 +1,124 @@
-const TokenTransaction = require('../models/TokenTransaction');
-const LanguageLearningProgress = require('../models/LanguageLearningProgress');
 const User = require('../models/User');
-const asyncHandler = require('../middleware/async');
-const ErrorResponse = require('../utils/errorResponse');
+const CulturalExchange = require('../models/CulturalExchange');
+const LanguageLearningSession = require('../models/LanguageLearningSession');
+const EnhancedBlockchainService = require('./enhancedBlockchainService');
 
 class TokenRewardService {
     constructor() {
+        this.blockchainService = new EnhancedBlockchainService();
+        
         // 奖励配置
         this.rewardConfig = {
-            // 注册奖励
-            registration: { amount: 10, reason: '新用户注册奖励' },
-            
-            // 每日签到奖励
-            dailyCheckin: {
-                base: 1,
-                streak: {
-                    7: 2,   // 连续7天
-                    14: 3,  // 连续14天
-                    30: 5   // 连续30天
-                }
+            // 文化交流活动奖励
+            culturalExchange: {
+                creation: 10,           // 创建活动奖励
+                participation: 5,       // 参与活动奖励
+                completion: 8,          // 完成活动奖励
+                highRating: 3,          // 高评分额外奖励
+                organizer: 15           // 组织者额外奖励
             },
             
-            // 内容创建奖励
-            content: {
-                post: { amount: 5, reason: '发布帖子奖励' },
-                comment: { amount: 1, reason: '发表评论奖励' },
-                resource: { amount: 10, reason: '分享学习资源奖励' },
-                translation: { amount: 2, reason: '提供翻译帮助奖励' }
+            // 语言学习奖励
+            languageLearning: {
+                sessionCreation: 12,    // 创建学习会话奖励
+                enrollment: 3,          // 注册学习奖励
+                lessonCompletion: 2,    // 完成课程奖励
+                assignmentSubmission: 1,// 提交作业奖励
+                perfectAttendance: 10,  // 完美出勤奖励
+                progressMilestone: 5,   // 进度里程碑奖励
+                sessionCompletion: 15   // 完成整个会话奖励
             },
             
-            // 学习成就奖励
-            learning: {
-                vocabulary: { amount: 0.5, reason: '学习新词汇奖励' },
-                lesson: { amount: 3, reason: '完成课程奖励' },
-                quiz: { amount: 2, reason: '通过测试奖励' },
-                streak: { amount: 1, reason: '学习连击奖励' }
+            // 社区贡献奖励
+            community: {
+                postCreation: 1,        // 发帖奖励
+                commentCreation: 0.5,   // 评论奖励
+                helpfulContent: 2,      // 有用内容奖励
+                moderatorAction: 3,     // 管理员行为奖励
+                reportValidation: 1     // 有效举报奖励
             },
             
-            // 社交互动奖励
-            social: {
-                like: { amount: 0.1, reason: '获得点赞奖励' },
-                helpful: { amount: 2, reason: '帮助他人奖励' },
-                invite: { amount: 20, reason: '邀请好友奖励' },
-                event: { amount: 10, reason: '参加活动奖励' }
+            // 特殊成就奖励
+            achievements: {
+                firstPost: 5,           // 首次发帖
+                firstExchange: 8,       // 首次文化交流
+                firstLearning: 6,       // 首次语言学习
+                weeklyActive: 10,       // 周活跃用户
+                monthlyActive: 25,      // 月活跃用户
+                culturalAmbassador: 50, // 文化大使
+                languageMentor: 40      // 语言导师
+            },
+            
+            // 每日限制
+            dailyLimits: {
+                maxDailyReward: 100,    // 每日最大奖励
+                maxPostReward: 10,      // 每日发帖最大奖励
+                maxCommentReward: 5     // 每日评论最大奖励
             }
         };
     }
     
     /**
-     * 奖励用户代币
-     * @param {string} userId 用户ID
-     * @param {string} type 奖励类型
-     * @param {Object} details 奖励详情
-     * @returns {Promise<Object>} 奖励结果
+     * 奖励用户CBT代币
      */
-    async awardTokens(userId, type, details = {}) {
+    async awardTokens(userId, amount, reason, category = 'general') {
         try {
             const user = await User.findById(userId);
             if (!user) {
                 throw new Error('用户不存在');
             }
             
-            const rewardAmount = this.calculateReward(type, details);
-            if (rewardAmount <= 0) {
-                return { success: false, message: '无效的奖励类型' };
+            // 检查每日奖励限制
+            const todayRewards = await this.getTodayUserRewards(userId);
+            if (todayRewards + amount > this.rewardConfig.dailyLimits.maxDailyReward) {
+                throw new Error('超出每日奖励限制');
             }
             
-            // 检查是否重复奖励
-            const isDuplicate = await this.checkDuplicateReward(userId, type, details);
-            if (isDuplicate) {
-                return { success: false, message: '重复奖励' };
+            // 如果用户有钱包地址，直接在区块链上奖励
+            if (user.walletAddress) {
+                const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
+                if (adminPrivateKey) {
+                    try {
+                        const result = await this.blockchainService.awardTokens(
+                            user.walletAddress,
+                            amount,
+                            reason,
+                            category,
+                            adminPrivateKey
+                        );
+                        
+                        // 记录到数据库
+                        user.tokenRewards.push({
+                            amount,
+                            reason,
+                            transactionHash: result.transactionHash,
+                            timestamp: new Date()
+                        });
+                        await user.save();
+                        
+                        return result;
+                    } catch (blockchainError) {
+                        console.error('区块链奖励失败，记录到数据库:', blockchainError);
+                    }
+                }
             }
             
-            // 创建交易记录
-            const transaction = new TokenTransaction({
-                type: 'reward',
-                to: user.walletAddress,
-                amount: rewardAmount,
-                purpose: this.getRewardReason(type, details),
-                category: this.getRewardCategory(type),
-                relatedUser: userId,
-                relatedContent: details.contentId ? {
-                    contentType: details.contentType,
-                    contentId: details.contentId
-                } : undefined,
-                status: 'confirmed', // 奖励直接确认
-                transactionHash: this.generateTransactionHash(),
-                confirmedAt: new Date()
-            });
-            
-            await transaction.save();
-            
-            // 更新用户奖励记录
+            // 如果区块链奖励失败或用户没有钱包，记录到数据库
             user.tokenRewards.push({
-                amount: rewardAmount,
-                reason: transaction.purpose,
-                transactionHash: transaction.transactionHash,
+                amount,
+                reason,
+                transactionHash: 'pending_blockchain',
                 timestamp: new Date()
             });
-            
             await user.save();
-            
-            // 更新学习进度（如果是学习相关奖励）
-            if (type.startsWith('learning.')) {
-                await this.updateLearningProgress(userId, type, details);
-            }
             
             return {
                 success: true,
-                data: {
-                    amount: rewardAmount,
-                    reason: transaction.purpose,
-                    transactionHash: transaction.transactionHash,
-                    newBalance: await this.getUserTokenBalance(userId)
-                }
+                amount,
+                reason,
+                category,
+                method: 'database'
             };
-            
         } catch (error) {
             console.error('奖励代币失败:', error);
             throw error;
@@ -123,277 +126,295 @@ class TokenRewardService {
     }
     
     /**
-     * 计算奖励金额
-     * @param {string} type 奖励类型
-     * @param {Object} details 奖励详情
-     * @returns {number} 奖励金额
+     * 批量奖励代币
      */
-    calculateReward(type, details) {
-        const parts = type.split('.');
-        const category = parts[0];
-        const action = parts[1];
-        
-        switch (category) {
-            case 'registration':
-                return this.rewardConfig.registration.amount;
-                
-            case 'dailyCheckin':
-                const streak = details.streak || 1;
-                let amount = this.rewardConfig.dailyCheckin.base;
-                
-                // 连击奖励
-                for (const [days, bonus] of Object.entries(this.rewardConfig.dailyCheckin.streak)) {
-                    if (streak >= parseInt(days)) {
-                        amount = bonus;
-                    }
+    async batchAwardTokens(rewards) {
+        try {
+            const results = [];
+            
+            for (const reward of rewards) {
+                try {
+                    const result = await this.awardTokens(
+                        reward.userId,
+                        reward.amount,
+                        reward.reason,
+                        reward.category
+                    );
+                    results.push({ ...reward, success: true, result });
+                } catch (error) {
+                    results.push({ ...reward, success: false, error: error.message });
                 }
-                return amount;
-                
-            case 'content':
-                return this.rewardConfig.content[action]?.amount || 0;
-                
-            case 'learning':
-                let baseAmount = this.rewardConfig.learning[action]?.amount || 0;
-                
-                // 根据难度调整奖励
-                if (details.difficulty) {
-                    const multiplier = {
-                        'beginner': 1,
-                        'intermediate': 1.5,
-                        'advanced': 2
-                    };
-                    baseAmount *= multiplier[details.difficulty] || 1;
-                }
-                
-                return baseAmount;
-                
-            case 'social':
-                return this.rewardConfig.social[action]?.amount || 0;
-                
-            default:
+            }
+            
+            return results;
+        } catch (error) {
+            console.error('批量奖励失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 文化交流活动奖励
+     */
+    async rewardCulturalExchange(exchangeId, action, userId) {
+        try {
+            const exchange = await CulturalExchange.findById(exchangeId);
+            if (!exchange) {
+                throw new Error('文化交流活动不存在');
+            }
+            
+            let amount = 0;
+            let reason = '';
+            
+            switch (action) {
+                case 'creation':
+                    amount = this.rewardConfig.culturalExchange.creation;
+                    reason = `创建文化交流活动: ${exchange.title}`;
+                    break;
+                case 'participation':
+                    amount = this.rewardConfig.culturalExchange.participation;
+                    reason = `参与文化交流活动: ${exchange.title}`;
+                    break;
+                case 'completion':
+                    amount = this.rewardConfig.culturalExchange.completion;
+                    reason = `完成文化交流活动: ${exchange.title}`;
+                    break;
+                case 'high_rating':
+                    amount = this.rewardConfig.culturalExchange.highRating;
+                    reason = `文化交流活动高评分奖励: ${exchange.title}`;
+                    break;
+                case 'organizer_bonus':
+                    amount = this.rewardConfig.culturalExchange.organizer;
+                    reason = `文化交流活动组织者奖励: ${exchange.title}`;
+                    break;
+                default:
+                    throw new Error('未知的奖励行为');
+            }
+            
+            return await this.awardTokens(userId, amount, reason, 'cultural_exchange');
+        } catch (error) {
+            console.error('文化交流奖励失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 语言学习奖励
+     */
+    async rewardLanguageLearning(sessionId, action, userId) {
+        try {
+            const session = await LanguageLearningSession.findById(sessionId);
+            if (!session) {
+                throw new Error('语言学习会话不存在');
+            }
+            
+            let amount = 0;
+            let reason = '';
+            
+            switch (action) {
+                case 'session_creation':
+                    amount = this.rewardConfig.languageLearning.sessionCreation;
+                    reason = `创建语言学习会话: ${session.title}`;
+                    break;
+                case 'enrollment':
+                    amount = this.rewardConfig.languageLearning.enrollment;
+                    reason = `注册语言学习会话: ${session.title}`;
+                    break;
+                case 'lesson_completion':
+                    amount = this.rewardConfig.languageLearning.lessonCompletion;
+                    reason = `完成课程: ${session.title}`;
+                    break;
+                case 'assignment_submission':
+                    amount = this.rewardConfig.languageLearning.assignmentSubmission;
+                    reason = `提交作业: ${session.title}`;
+                    break;
+                case 'perfect_attendance':
+                    amount = this.rewardConfig.languageLearning.perfectAttendance;
+                    reason = `完美出勤奖励: ${session.title}`;
+                    break;
+                case 'progress_milestone':
+                    amount = this.rewardConfig.languageLearning.progressMilestone;
+                    reason = `学习进度里程碑: ${session.title}`;
+                    break;
+                case 'session_completion':
+                    amount = this.rewardConfig.languageLearning.sessionCompletion;
+                    reason = `完成语言学习会话: ${session.title}`;
+                    break;
+                default:
+                    throw new Error('未知的奖励行为');
+            }
+            
+            return await this.awardTokens(userId, amount, reason, 'language_learning');
+        } catch (error) {
+            console.error('语言学习奖励失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 社区贡献奖励
+     */
+    async rewardCommunityContribution(action, userId, details = {}) {
+        try {
+            let amount = 0;
+            let reason = '';
+            
+            switch (action) {
+                case 'post_creation':
+                    amount = this.rewardConfig.community.postCreation;
+                    reason = `发布帖子: ${details.title || ''}`;
+                    break;
+                case 'comment_creation':
+                    amount = this.rewardConfig.community.commentCreation;
+                    reason = `发表评论`;
+                    break;
+                case 'helpful_content':
+                    amount = this.rewardConfig.community.helpfulContent;
+                    reason = `有用内容奖励`;
+                    break;
+                case 'moderator_action':
+                    amount = this.rewardConfig.community.moderatorAction;
+                    reason = `管理员行为奖励`;
+                    break;
+                case 'report_validation':
+                    amount = this.rewardConfig.community.reportValidation;
+                    reason = `有效举报奖励`;
+                    break;
+                default:
+                    throw new Error('未知的奖励行为');
+            }
+            
+            return await this.awardTokens(userId, amount, reason, 'community');
+        } catch (error) {
+            console.error('社区贡献奖励失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 特殊成就奖励
+     */
+    async rewardAchievement(achievement, userId) {
+        try {
+            const amount = this.rewardConfig.achievements[achievement];
+            if (!amount) {
+                throw new Error('未知的成就类型');
+            }
+            
+            const reason = `成就解锁: ${achievement}`;
+            
+            return await this.awardTokens(userId, amount, reason, 'achievement');
+        } catch (error) {
+            console.error('成就奖励失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 获取用户今日奖励总额
+     */
+    async getTodayUserRewards(userId) {
+        try {
+            const user = await User.findById(userId);
+            if (!user) {
                 return 0;
-        }
-    }
-    
-    /**
-     * 获取奖励原因
-     * @param {string} type 奖励类型
-     * @param {Object} details 奖励详情
-     * @returns {string} 奖励原因
-     */
-    getRewardReason(type, details) {
-        const parts = type.split('.');
-        const category = parts[0];
-        const action = parts[1];
-        
-        switch (category) {
-            case 'registration':
-                return this.rewardConfig.registration.reason;
-            case 'dailyCheckin':
-                return `每日签到奖励 (连续${details.streak || 1}天)`;
-            case 'content':
-                return this.rewardConfig.content[action]?.reason || '内容创建奖励';
-            case 'learning':
-                return this.rewardConfig.learning[action]?.reason || '学习成就奖励';
-            case 'social':
-                return this.rewardConfig.social[action]?.reason || '社交互动奖励';
-            default:
-                return '系统奖励';
-        }
-    }
-    
-    /**
-     * 获取奖励类别
-     * @param {string} type 奖励类型
-     * @returns {string} 奖励类别
-     */
-    getRewardCategory(type) {
-        const category = type.split('.')[0];
-        const mapping = {
-            'registration': 'general',
-            'dailyCheckin': 'general',
-            'content': 'content_creation',
-            'learning': 'language_learning',
-            'social': 'community_participation'
-        };
-        return mapping[category] || 'general';
-    }
-    
-    /**
-     * 检查重复奖励
-     * @param {string} userId 用户ID
-     * @param {string} type 奖励类型
-     * @param {Object} details 奖励详情
-     * @returns {Promise<boolean>} 是否重复
-     */
-    async checkDuplicateReward(userId, type, details) {
-        // 每日签到检查
-        if (type === 'dailyCheckin') {
+            }
+            
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             
-            const existingReward = await TokenTransaction.findOne({
-                relatedUser: userId,
-                purpose: { $regex: /每日签到奖励/ },
-                createdAt: { $gte: today }
-            });
-            
-            return !!existingReward;
-        }
-        
-        // 内容相关奖励检查
-        if (type.startsWith('content.') && details.contentId) {
-            const existingReward = await TokenTransaction.findOne({
-                relatedUser: userId,
-                'relatedContent.contentId': details.contentId,
-                purpose: { $regex: new RegExp(this.getRewardReason(type, details)) }
-            });
-            
-            return !!existingReward;
-        }
-        
-        return false;
-    }
-    
-    /**
-     * 更新学习进度
-     * @param {string} userId 用户ID
-     * @param {string} type 奖励类型
-     * @param {Object} details 奖励详情
-     */
-    async updateLearningProgress(userId, type, details) {
-        if (!details.language) return;
-        
-        let progress = await LanguageLearningProgress.findOne({
-            user: userId,
-            language: details.language
-        });
-        
-        if (!progress) {
-            progress = new LanguageLearningProgress({
-                user: userId,
-                language: details.language
-            });
-        }
-        
-        const action = type.split('.')[1];
-        
-        switch (action) {
-            case 'vocabulary':
-                progress.vocabularyLearned += 1;
-                break;
-            case 'lesson':
-                progress.totalStudyTime += details.duration || 30;
-                break;
-            case 'quiz':
-                // 根据分数更新技能等级
-                if (details.skill && details.score) {
-                    const currentLevel = progress.skillLevels[details.skill] || 0;
-                    const improvement = Math.floor(details.score / 10);
-                    progress.skillLevels[details.skill] = Math.min(100, currentLevel + improvement);
-                }
-                break;
-        }
-        
-        // 更新学习连击
-        const today = new Date();
-        const lastStudy = progress.studyStreak.lastStudyDate;
-        
-        if (!lastStudy || this.isNewDay(lastStudy, today)) {
-            if (lastStudy && this.isConsecutiveDay(lastStudy, today)) {
-                progress.studyStreak.current += 1;
-            } else {
-                progress.studyStreak.current = 1;
-            }
-            
-            progress.studyStreak.longest = Math.max(
-                progress.studyStreak.longest,
-                progress.studyStreak.current
+            const todayRewards = user.tokenRewards.filter(reward => 
+                reward.timestamp >= today
             );
-            progress.studyStreak.lastStudyDate = today;
-        }
-        
-        await progress.save();
-    }
-    
-    /**
-     * 获取用户代币余额
-     * @param {string} userId 用户ID
-     * @returns {Promise<number>} 代币余额
-     */
-    async getUserTokenBalance(userId) {
-        const user = await User.findById(userId);
-        if (!user || !user.walletAddress) {
+            
+            return todayRewards.reduce((sum, reward) => sum + reward.amount, 0);
+        } catch (error) {
+            console.error('获取今日奖励失败:', error);
             return 0;
         }
-        
-        // 计算总收入
-        const totalIncome = await TokenTransaction.aggregate([
-            {
-                $match: {
-                    to: user.walletAddress,
-                    status: 'confirmed'
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$amount' }
+    }
+    
+    /**
+     * 获取用户奖励统计
+     */
+    async getUserRewardStats(userId) {
+        try {
+            const user = await User.findById(userId);
+            if (!user) {
+                throw new Error('用户不存在');
+            }
+            
+            const totalRewards = user.tokenRewards.reduce((sum, reward) => sum + reward.amount, 0);
+            const todayRewards = await this.getTodayUserRewards(userId);
+            
+            // 按类别统计
+            const categoryStats = {};
+            user.tokenRewards.forEach(reward => {
+                const category = reward.reason.includes('文化交流') ? 'cultural_exchange' :
+                               reward.reason.includes('语言学习') ? 'language_learning' :
+                               reward.reason.includes('社区') ? 'community' : 'other';
+                
+                categoryStats[category] = (categoryStats[category] || 0) + reward.amount;
+            });
+            
+            return {
+                totalRewards,
+                todayRewards,
+                rewardCount: user.tokenRewards.length,
+                categoryStats,
+                dailyLimit: this.rewardConfig.dailyLimits.maxDailyReward,
+                remainingToday: Math.max(0, this.rewardConfig.dailyLimits.maxDailyReward - todayRewards)
+            };
+        } catch (error) {
+            console.error('获取用户奖励统计失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 同步区块链奖励到数据库
+     */
+    async syncBlockchainRewards(userId) {
+        try {
+            const user = await User.findById(userId);
+            if (!user || !user.walletAddress) {
+                return { success: false, message: '用户没有钱包地址' };
+            }
+            
+            // 获取区块链上的奖励历史
+            const blockchainRewards = await this.blockchainService.getUserTransactions(user.walletAddress);
+            
+            // 同步到数据库
+            let syncCount = 0;
+            for (const reward of blockchainRewards) {
+                const existingReward = user.tokenRewards.find(r => 
+                    r.transactionHash === reward.transactionHash
+                );
+                
+                if (!existingReward) {
+                    user.tokenRewards.push({
+                        amount: parseFloat(reward.amount),
+                        reason: reward.purpose,
+                        transactionHash: reward.transactionHash,
+                        timestamp: reward.timestamp
+                    });
+                    syncCount++;
                 }
             }
-        ]);
-        
-        // 计算总支出
-        const totalExpense = await TokenTransaction.aggregate([
-            {
-                $match: {
-                    from: user.walletAddress,
-                    status: 'confirmed'
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$amount' }
-                }
+            
+            if (syncCount > 0) {
+                await user.save();
             }
-        ]);
-        
-        const income = totalIncome[0]?.total || 0;
-        const expense = totalExpense[0]?.total || 0;
-        
-        return income - expense;
-    }
-    
-    /**
-     * 生成交易哈希
-     * @returns {string} 交易哈希
-     */
-    generateTransactionHash() {
-        const crypto = require('crypto');
-        return crypto.randomBytes(32).toString('hex');
-    }
-    
-    /**
-     * 检查是否是新的一天
-     * @param {Date} lastDate 上次日期
-     * @param {Date} currentDate 当前日期
-     * @returns {boolean} 是否是新的一天
-     */
-    isNewDay(lastDate, currentDate) {
-        return lastDate.toDateString() !== currentDate.toDateString();
-    }
-    
-    /**
-     * 检查是否是连续的一天
-     * @param {Date} lastDate 上次日期
-     * @param {Date} currentDate 当前日期
-     * @returns {boolean} 是否是连续的一天
-     */
-    isConsecutiveDay(lastDate, currentDate) {
-        const diffTime = Math.abs(currentDate - lastDate);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays === 1;
+            
+            return {
+                success: true,
+                syncCount,
+                message: `同步了${syncCount}条奖励记录`
+            };
+        } catch (error) {
+            console.error('同步区块链奖励失败:', error);
+            throw error;
+        }
     }
 }
 
