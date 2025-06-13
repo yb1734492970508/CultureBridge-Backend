@@ -30,6 +30,81 @@ const UserSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user'
   },
+  // 区块链相关字段
+  walletAddress: {
+    type: String,
+    unique: true,
+    sparse: true,
+    match: [/^0x[a-fA-F0-9]{40}$/, '请提供有效的钱包地址']
+  },
+  privateKey: {
+    type: String,
+    select: false // 私钥不会在查询中返回
+  },
+  // CBT代币奖励历史
+  tokenRewards: [{
+    amount: {
+      type: Number,
+      required: true
+    },
+    reason: {
+      type: String,
+      required: true
+    },
+    transactionHash: {
+      type: String,
+      required: true
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  // CBT代币转账历史
+  tokenTransfers: [{
+    from: {
+      type: String,
+      required: true
+    },
+    to: {
+      type: String,
+      required: true
+    },
+    amount: {
+      type: Number,
+      required: true
+    },
+    purpose: {
+      type: String,
+      required: true
+    },
+    category: {
+      type: String,
+      default: 'general'
+    },
+    tags: [String],
+    transactionHash: {
+      type: String,
+      required: true
+    },
+    blockchainTransactionId: {
+      type: Number
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  // 语言学习相关
+  nativeLanguages: [String],
+  learningLanguages: [String],
+  languageProficiency: [{
+    language: String,
+    level: {
+      type: String,
+      enum: ['beginner', 'intermediate', 'advanced', 'native']
+    }
+  }],
   createdAt: {
     type: Date,
     default: Date.now
