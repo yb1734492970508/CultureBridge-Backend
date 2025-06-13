@@ -1,254 +1,261 @@
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs').promises;
 const { protect } = require('../middleware/auth');
-const EnhancedVoiceTranslationService = require('../services/enhancedVoiceTranslationService');
 const asyncHandler = require('../middleware/async');
 const ErrorResponse = require('../utils/errorResponse');
+const EnhancedVoiceTranslationService = require('../services/enhancedVoiceTranslationService');
+const EnhancedBlockchainService = require('../services/enhancedBlockchainService');
+const VoiceTranslation = require('../models/VoiceTranslation');
+const User = require('../models/User');
 
 const router = express.Router();
-const voiceService = new EnhancedVoiceTranslationService();
 
-// 配置multer用于文件上传
+// 初始化服务
+const voiceService = new EnhancedVoiceTranslationService();
+const blockchainService = new EnhancedBlockchainService();
+
+// 配置文件上传
 const storage = multer.memoryStorage();
 const upload = multer({
-    storage: storage,
+    storage,
     limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB限制
+        fileSize: 10 * 1024 * 1024, // 10MB
+        files: 1
     },
     fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('audio/')) {
+        // 检查文件类型
+        const allowedMimes = [
+            'audio/wav',
+            'audio/mpeg',
+            'audio/mp3',
+            'audio/ogg',
+            'audio/webm',
+            'audio/flac'
+        ];
+        
+        if (allowedMimes.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new ErrorResponse('只支持音频文件', 400), false);
+            cb(new ErrorResponse('不支持的音频格式', 400), false);
         }
     }
 });
 
 /**
- * @desc    语音转文字
- * @route   POST /api/v1/voice/transcribe
+ * @desc    获取支持的语言列表
+ * @route   GET /api/v2/voice/languages
+ * @access  Public
+ */
+router.get('/languages', asyncHandler(async (req, res, next) => {
+    const languages = voiceService.getSupportedLanguages();
+    
+    res.status(200).json({
+        success: true,
+        count: languages.length,
+        data: languages
+    });
+}));
+
+/**
+ * @desc    语音翻译（完整流程）
+ * @route   POST /api/v2/voice/translate
  * @access  Private
  */
-router.post('/transcribe', protect, upload.single('audio'), asyncHandler(async (req, res, next) => {
+router.post('/translate', protect, upload.single('audio'), asyncHandler(async (req, res, next) => {
+    const { sourceLanguage = 'auto', targetLanguages, chatRoomId } = req.body;
+    
+    // 验证输入
     if (!req.file) {
         return next(new ErrorResponse('请上传音频文件', 400));
     }
     
-    const { language = 'auto' } = req.body;
+    if (!targetLanguages) {
+        return next(new ErrorResponse('请指定目标语言', 400));
+    }
+    
+    let parsedTargetLanguages;
+    try {
+        parsedTargetLanguages = Array.isArray(targetLanguages) 
+            ? targetLanguages 
+            : JSON.parse(targetLanguages);
+    } catch (error) {
+        return next(new ErrorResponse('目标语言格式错误', 400));
+    }
+    
+    if (!Array.isArray(parsedTargetLanguages) || parsedTargetLanguages.length === 0) {
+        return next(new ErrorResponse('请至少指定一种目标语言', 400));
+    }
     
     try {
-        const result = await voiceService.transcribeAudio(req.file.buffer, language);
+        // 处理语音翻译
+        const result = await voiceService.processVoiceMessage(
+            req.file.buffer,
+            sourceLanguage,
+            parsedTargetLanguages,
+            req.user.id,
+            chatRoomId
+        );
+        
+        // 发放语音翻译奖励
+        await distributeVoiceTranslationReward(req.user.id);
         
         res.status(200).json({
             success: true,
-            data: {
-                text: result.text,
-                confidence: result.confidence,
-                detectedLanguage: result.detectedLanguage,
-                culturalContext: result.culturalContext,
-                wordTimings: result.wordTimings,
-                alternatives: result.alternatives
-            }
+            data: result.data,
+            message: '语音翻译完成'
         });
+        
     } catch (error) {
-        return next(new ErrorResponse(error.message, 500));
+        console.error('语音翻译失败:', error);
+        return next(new ErrorResponse(error.message || '语音翻译失败', 500));
     }
 }));
 
 /**
- * @desc    文本翻译
- * @route   POST /api/v1/voice/translate
+ * @desc    仅语音识别（不翻译）
+ * @route   POST /api/v2/voice/transcribe
  * @access  Private
  */
-router.post('/translate', protect, asyncHandler(async (req, res, next) => {
-    const { text, sourceLanguage, targetLanguage, culturalContext } = req.body;
+router.post('/transcribe', protect, upload.single('audio'), asyncHandler(async (req, res, next) => {
+    const { language = 'auto' } = req.body;
     
-    if (!text || !sourceLanguage || !targetLanguage) {
-        return next(new ErrorResponse('文本、源语言和目标语言不能为空', 400));
+    if (!req.file) {
+        return next(new ErrorResponse('请上传音频文件', 400));
     }
     
     try {
-        const result = await voiceService.translateText(text, sourceLanguage, targetLanguage, culturalContext);
+        // 预处理音频
+        const processedAudio = await voiceService.preprocessAudio(req.file.buffer);
+        
+        // 语音识别
+        const transcription = await voiceService.transcribeAudio(
+            processedAudio.buffer,
+            language
+        );
+        
+        // 清理临时文件
+        await voiceService.cleanupTempFiles([processedAudio.filePath]);
         
         res.status(200).json({
             success: true,
             data: {
-                originalText: result.originalText,
-                translatedText: result.text,
-                confidence: result.confidence,
-                detectedLanguage: result.detectedLanguage,
-                culturalNotes: result.culturalNotes
+                text: transcription.text,
+                confidence: transcription.confidence,
+                detectedLanguage: transcription.detectedLanguage,
+                wordTimings: transcription.wordTimings
             }
         });
+        
     } catch (error) {
-        return next(new ErrorResponse(error.message, 500));
+        console.error('语音识别失败:', error);
+        return next(new ErrorResponse(error.message || '语音识别失败', 500));
     }
 }));
 
 /**
  * @desc    文字转语音
- * @route   POST /api/v1/voice/synthesize
+ * @route   POST /api/v2/voice/synthesize
  * @access  Private
  */
 router.post('/synthesize', protect, asyncHandler(async (req, res, next) => {
-    const { text, language, options = {} } = req.body;
+    const { text, language, voiceType = 'neutral' } = req.body;
     
     if (!text || !language) {
-        return next(new ErrorResponse('文本和语言不能为空', 400));
+        return next(new ErrorResponse('请提供文本和语言', 400));
+    }
+    
+    if (text.length > 5000) {
+        return next(new ErrorResponse('文本长度不能超过5000字符', 400));
     }
     
     try {
-        const audioBuffer = await voiceService.synthesizeSpeech(text, language, options);
-        
-        // 设置响应头
-        res.set({
-            'Content-Type': 'audio/mpeg',
-            'Content-Length': audioBuffer.length,
-            'Content-Disposition': 'attachment; filename="synthesized_speech.mp3"'
-        });
-        
-        res.send(audioBuffer);
-    } catch (error) {
-        return next(new ErrorResponse(error.message, 500));
-    }
-}));
-
-/**
- * @desc    完整语音翻译流程
- * @route   POST /api/v1/voice/translate-audio
- * @access  Private
- */
-router.post('/translate-audio', protect, upload.single('audio'), asyncHandler(async (req, res, next) => {
-    if (!req.file) {
-        return next(new ErrorResponse('请上传音频文件', 400));
-    }
-    
-    const { sourceLanguage = 'auto', targetLanguage, roomId } = req.body;
-    
-    if (!targetLanguage) {
-        return next(new ErrorResponse('目标语言不能为空', 400));
-    }
-    
-    try {
-        const result = await voiceService.processVoiceMessage({
-            audioData: req.file.buffer,
-            sourceLanguage,
-            targetLanguage,
-            userId: req.user.id,
-            roomId,
-            startTime: Date.now()
-        });
-        
-        if (result.success) {
-            res.status(200).json({
-                success: true,
-                data: {
-                    originalText: result.originalText,
-                    translatedText: result.translatedText,
-                    originalAudioUrl: result.originalAudioUrl,
-                    translatedAudioUrl: result.translatedAudioUrl,
-                    confidence: result.confidence,
-                    culturalContext: result.culturalContext,
-                    culturalNotes: result.culturalNotes,
-                    detectedLanguage: result.detectedLanguage
-                }
-            });
-        } else {
-            return next(new ErrorResponse(result.error, 500));
-        }
-    } catch (error) {
-        return next(new ErrorResponse(error.message, 500));
-    }
-}));
-
-/**
- * @desc    获取支持的语言列表
- * @route   GET /api/v1/voice/languages
- * @access  Public
- */
-router.get('/languages', asyncHandler(async (req, res, next) => {
-    try {
-        const languages = voiceService.getSupportedLanguages();
+        const audioBuffer = await voiceService.synthesizeSpeech(text, language, voiceType);
+        const duration = voiceService.estimateAudioDuration(text, language);
         
         res.status(200).json({
             success: true,
-            count: languages.length,
-            data: languages
-        });
-    } catch (error) {
-        return next(new ErrorResponse('获取语言列表失败', 500));
-    }
-}));
-
-/**
- * @desc    实时语音识别（WebSocket连接信息）
- * @route   GET /api/v1/voice/streaming-info
- * @access  Private
- */
-router.get('/streaming-info', protect, asyncHandler(async (req, res, next) => {
-    try {
-        const streamingInfo = {
-            endpoint: '/voice-streaming',
-            supportedFormats: ['webm', 'opus', 'wav'],
-            sampleRate: 48000,
-            encoding: 'WEBM_OPUS',
-            maxDuration: 300, // 5分钟
-            languages: voiceService.getSupportedLanguages().map(lang => ({
-                code: lang.code,
-                name: lang.name
-            })),
-            events: {
-                connect: 'voice:connect',
-                start: 'voice:start',
-                data: 'voice:data',
-                result: 'voice:result',
-                end: 'voice:end',
-                error: 'voice:error'
+            data: {
+                audioData: audioBuffer.toString('base64'),
+                mimeType: 'audio/mpeg',
+                duration,
+                text,
+                language,
+                voiceType
             }
-        };
-        
-        res.status(200).json({
-            success: true,
-            data: streamingInfo
         });
+        
     } catch (error) {
-        return next(new ErrorResponse('获取流式识别信息失败', 500));
+        console.error('语音合成失败:', error);
+        return next(new ErrorResponse(error.message || '语音合成失败', 500));
     }
 }));
 
 /**
- * @desc    获取用户语音翻译历史
- * @route   GET /api/v1/voice/history
+ * @desc    批量文本翻译
+ * @route   POST /api/v2/voice/translate-text
+ * @access  Private
+ */
+router.post('/translate-text', protect, asyncHandler(async (req, res, next) => {
+    const { text, sourceLanguage, targetLanguages } = req.body;
+    
+    if (!text || !targetLanguages) {
+        return next(new ErrorResponse('请提供文本和目标语言', 400));
+    }
+    
+    if (text.length > 5000) {
+        return next(new ErrorResponse('文本长度不能超过5000字符', 400));
+    }
+    
+    if (!Array.isArray(targetLanguages) || targetLanguages.length === 0) {
+        return next(new ErrorResponse('请至少指定一种目标语言', 400));
+    }
+    
+    try {
+        const translations = await voiceService.translateText(
+            text,
+            sourceLanguage || 'auto',
+            targetLanguages
+        );
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                originalText: text,
+                sourceLanguage,
+                translations
+            }
+        });
+        
+    } catch (error) {
+        console.error('文本翻译失败:', error);
+        return next(new ErrorResponse(error.message || '文本翻译失败', 500));
+    }
+}));
+
+/**
+ * @desc    获取用户翻译历史
+ * @route   GET /api/v2/voice/history
  * @access  Private
  */
 router.get('/history', protect, asyncHandler(async (req, res, next) => {
-    const { page = 1, limit = 20, language, roomId } = req.query;
+    const { page = 1, limit = 20, chatRoomId } = req.query;
+    const skip = (page - 1) * limit;
     
     try {
-        const VoiceTranslation = require('../models/VoiceTranslation');
-        
-        const query = { user: req.user.id };
-        
-        if (language) {
-            query.$or = [
-                { sourceLanguage: language },
-                { targetLanguage: language }
-            ];
+        let query = { user: req.user.id };
+        if (chatRoomId) {
+            query.chatRoom = chatRoomId;
         }
-        
-        if (roomId) {
-            query.chatRoom = roomId;
-        }
-        
-        const skip = (page - 1) * limit;
         
         const [translations, total] = await Promise.all([
             VoiceTranslation.find(query)
                 .sort({ createdAt: -1 })
-                .skip(skip)
                 .limit(parseInt(limit))
+                .skip(skip)
                 .populate('chatRoom', 'name type')
-                .lean(),
+                .select('-audioTranslations'), // 不返回音频数据
             VoiceTranslation.countDocuments(query)
         ]);
         
@@ -256,108 +263,258 @@ router.get('/history', protect, asyncHandler(async (req, res, next) => {
             success: true,
             count: translations.length,
             total,
-            page: parseInt(page),
-            pages: Math.ceil(total / limit),
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                pages: Math.ceil(total / limit)
+            },
             data: translations
         });
+        
     } catch (error) {
+        console.error('获取翻译历史失败:', error);
         return next(new ErrorResponse('获取翻译历史失败', 500));
     }
 }));
 
 /**
- * @desc    获取语音翻译统计
- * @route   GET /api/v1/voice/stats
+ * @desc    获取翻译详情（包含音频）
+ * @route   GET /api/v2/voice/translation/:id
  * @access  Private
  */
-router.get('/stats', protect, asyncHandler(async (req, res, next) => {
+router.get('/translation/:id', protect, asyncHandler(async (req, res, next) => {
     try {
-        const VoiceTranslation = require('../models/VoiceTranslation');
-        
-        const userId = req.user.id;
-        
-        const [
-            totalTranslations,
-            languageStats,
-            recentActivity
-        ] = await Promise.all([
-            VoiceTranslation.countDocuments({ user: userId }),
-            VoiceTranslation.aggregate([
-                { $match: { user: userId } },
-                { $group: {
-                    _id: '$sourceLanguage',
-                    count: { $sum: 1 },
-                    avgConfidence: { $avg: '$confidence' }
-                }},
-                { $sort: { count: -1 } }
-            ]),
-            VoiceTranslation.find({ user: userId })
-                .sort({ createdAt: -1 })
-                .limit(7)
-                .select('createdAt sourceLanguage targetLanguage confidence')
-                .lean()
-        ]);
-        
-        const stats = {
-            totalTranslations,
-            languageStats,
-            recentActivity,
-            averageConfidence: languageStats.reduce((sum, stat) => sum + stat.avgConfidence, 0) / languageStats.length || 0,
-            mostUsedLanguage: languageStats[0]?._id || null
-        };
-        
-        res.status(200).json({
-            success: true,
-            data: stats
-        });
-    } catch (error) {
-        return next(new ErrorResponse('获取统计信息失败', 500));
-    }
-}));
-
-/**
- * @desc    删除语音翻译记录
- * @route   DELETE /api/v1/voice/:id
- * @access  Private
- */
-router.delete('/:id', protect, asyncHandler(async (req, res, next) => {
-    try {
-        const VoiceTranslation = require('../models/VoiceTranslation');
-        const fs = require('fs').promises;
-        
-        const translation = await VoiceTranslation.findById(req.params.id);
+        const translation = await VoiceTranslation.findOne({
+            _id: req.params.id,
+            user: req.user.id
+        }).populate('chatRoom', 'name type');
         
         if (!translation) {
             return next(new ErrorResponse('翻译记录不存在', 404));
         }
         
-        // 检查权限
-        if (translation.user.toString() !== req.user.id && req.user.role !== 'admin') {
-            return next(new ErrorResponse('权限不足', 403));
-        }
+        res.status(200).json({
+            success: true,
+            data: translation
+        });
         
-        // 删除音频文件
-        try {
-            if (translation.originalAudioPath) {
-                await fs.unlink(translation.originalAudioPath);
-            }
-            if (translation.translatedAudioPath) {
-                await fs.unlink(translation.translatedAudioPath);
-            }
-        } catch (fileError) {
-            console.error('删除音频文件失败:', fileError);
-        }
-        
-        await translation.deleteOne();
+    } catch (error) {
+        console.error('获取翻译详情失败:', error);
+        return next(new ErrorResponse('获取翻译详情失败', 500));
+    }
+}));
+
+/**
+ * @desc    删除翻译记录
+ * @route   DELETE /api/v2/voice/translation/:id
+ * @access  Private
+ */
+router.delete('/translation/:id', protect, asyncHandler(async (req, res, next) => {
+    try {
+        await voiceService.deleteVoiceTranslation(req.params.id, req.user.id);
         
         res.status(200).json({
             success: true,
             message: '翻译记录已删除'
         });
+        
     } catch (error) {
-        return next(new ErrorResponse('删除记录失败', 500));
+        console.error('删除翻译记录失败:', error);
+        return next(new ErrorResponse(error.message || '删除翻译记录失败', 500));
     }
 }));
+
+/**
+ * @desc    获取用户语音统计
+ * @route   GET /api/v2/voice/stats
+ * @access  Private
+ */
+router.get('/stats', protect, asyncHandler(async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        
+        // 获取用户翻译统计
+        const stats = await VoiceTranslation.aggregate([
+            { $match: { user: userId } },
+            {
+                $group: {
+                    _id: null,
+                    totalTranslations: { $sum: 1 },
+                    avgConfidence: { $avg: '$confidence' },
+                    avgProcessingTime: { $avg: '$processingTime' },
+                    languageUsage: {
+                        $push: {
+                            source: '$sourceLanguage',
+                            targets: { $objectToArray: '$translations' }
+                        }
+                    }
+                }
+            }
+        ]);
+        
+        // 获取最近7天的使用情况
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        const recentActivity = await VoiceTranslation.aggregate([
+            {
+                $match: {
+                    user: userId,
+                    createdAt: { $gte: sevenDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        $dateToString: {
+                            format: '%Y-%m-%d',
+                            date: '$createdAt'
+                        }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+        
+        const result = {
+            overall: stats[0] || {
+                totalTranslations: 0,
+                avgConfidence: 0,
+                avgProcessingTime: 0,
+                languageUsage: []
+            },
+            recentActivity,
+            user: {
+                translationCount: req.user.translationCount || 0,
+                lastTranslationAt: req.user.lastTranslationAt
+            }
+        };
+        
+        res.status(200).json({
+            success: true,
+            data: result
+        });
+        
+    } catch (error) {
+        console.error('获取语音统计失败:', error);
+        return next(new ErrorResponse('获取语音统计失败', 500));
+    }
+}));
+
+/**
+ * @desc    语音翻译服务健康检查
+ * @route   GET /api/v2/voice/health
+ * @access  Public
+ */
+router.get('/health', asyncHandler(async (req, res, next) => {
+    try {
+        const healthStatus = await voiceService.healthCheck();
+        const serviceStats = await voiceService.getServiceStats();
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                health: healthStatus,
+                stats: serviceStats,
+                supportedLanguages: voiceService.getSupportedLanguages().length,
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('语音服务健康检查失败:', error);
+        return next(new ErrorResponse('语音服务健康检查失败', 500));
+    }
+}));
+
+/**
+ * @desc    语音翻译配置
+ * @route   GET /api/v2/voice/config
+ * @access  Private
+ */
+router.get('/config', protect, asyncHandler(async (req, res, next) => {
+    const config = {
+        maxFileSize: '10MB',
+        supportedFormats: ['wav', 'mp3', 'ogg', 'webm', 'flac'],
+        maxTextLength: 5000,
+        supportedLanguages: voiceService.getSupportedLanguages(),
+        features: {
+            speechRecognition: true,
+            textToSpeech: true,
+            translation: true,
+            voiceMessages: true,
+            batchTranslation: true
+        },
+        rewards: {
+            voiceTranslation: '2 CBT',
+            dailyUsage: '最多10次免费翻译',
+            premiumFeatures: '无限制使用'
+        }
+    };
+    
+    res.status(200).json({
+        success: true,
+        data: config
+    });
+}));
+
+/**
+ * @desc    实时语音翻译（WebSocket支持）
+ * @route   POST /api/v2/voice/realtime
+ * @access  Private
+ */
+router.post('/realtime', protect, asyncHandler(async (req, res, next) => {
+    const { sessionId, audioChunk, isLast = false } = req.body;
+    
+    if (!sessionId || !audioChunk) {
+        return next(new ErrorResponse('请提供会话ID和音频数据', 400));
+    }
+    
+    try {
+        // 这里可以实现实时语音翻译的逻辑
+        // 暂时返回占位符响应
+        res.status(200).json({
+            success: true,
+            data: {
+                sessionId,
+                isProcessing: !isLast,
+                partialResult: isLast ? '实时翻译结果' : null
+            },
+            message: '实时语音翻译功能开发中'
+        });
+        
+    } catch (error) {
+        console.error('实时语音翻译失败:', error);
+        return next(new ErrorResponse('实时语音翻译失败', 500));
+    }
+}));
+
+/**
+ * 发放语音翻译奖励
+ */
+async function distributeVoiceTranslationReward(userId) {
+    try {
+        const user = await User.findById(userId);
+        if (!user.walletAddress) return;
+        
+        const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
+        if (!adminPrivateKey) return;
+        
+        await blockchainService.distributeReward(
+            user.walletAddress,
+            2, // 2 CBT语音翻译奖励
+            '使用语音翻译奖励',
+            'LEARNING_REWARD',
+            adminPrivateKey
+        );
+        
+        console.log(`✅ 语音翻译奖励已发放给用户: ${user.username}`);
+        
+    } catch (error) {
+        console.error('发放语音翻译奖励失败:', error);
+    }
+}
 
 module.exports = router;
 

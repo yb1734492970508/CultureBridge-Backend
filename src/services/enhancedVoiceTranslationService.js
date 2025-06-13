@@ -1,516 +1,546 @@
+const speech = require('@google-cloud/speech');
+const textToSpeech = require('@google-cloud/text-to-speech');
+const translate = require('@google-cloud/translate').v2.Translate;
 const VoiceTranslation = require('../models/VoiceTranslation');
-const asyncHandler = require('../middleware/async');
-const ErrorResponse = require('../utils/errorResponse');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs').promises;
-
-// 语音识别和翻译服务（使用开源替代方案）
+const User = require('../models/User');
 const ffmpeg = require('fluent-ffmpeg');
-const axios = require('axios');
+const fs = require('fs').promises;
+const path = require('path');
+const crypto = require('crypto');
 
 class EnhancedVoiceTranslationService {
     constructor() {
-        // 配置多个翻译服务提供商
-        this.translationProviders = {
-            libre: {
-                url: process.env.LIBRE_TRANSLATE_URL || 'https://libretranslate.de/translate',
-                apiKey: process.env.LIBRE_TRANSLATE_API_KEY
-            },
-            mymemory: {
-                url: 'https://api.mymemory.translated.net/get',
-                email: process.env.MYMEMORY_EMAIL
-            },
-            azure: {
-                url: process.env.AZURE_TRANSLATE_URL,
-                apiKey: process.env.AZURE_TRANSLATE_KEY,
-                region: process.env.AZURE_TRANSLATE_REGION
-            }
-        };
-        
-        // 语音识别服务配置
-        this.speechProviders = {
-            whisper: {
-                url: process.env.WHISPER_API_URL || 'http://localhost:9000/asr',
-                model: 'whisper-1'
-            },
-            azure: {
-                url: process.env.AZURE_SPEECH_URL,
-                apiKey: process.env.AZURE_SPEECH_KEY,
-                region: process.env.AZURE_SPEECH_REGION
-            }
-        };
+        // 初始化Google Cloud服务
+        this.initializeGoogleCloudServices();
         
         // 支持的语言配置
         this.supportedLanguages = {
-            'zh': { name: '中文', code: 'zh-CN', whisperCode: 'zh' },
-            'en': { name: 'English', code: 'en-US', whisperCode: 'en' },
-            'es': { name: 'Español', code: 'es-ES', whisperCode: 'es' },
-            'fr': { name: 'Français', code: 'fr-FR', whisperCode: 'fr' },
-            'de': { name: 'Deutsch', code: 'de-DE', whisperCode: 'de' },
-            'ja': { name: '日本語', code: 'ja-JP', whisperCode: 'ja' },
-            'ko': { name: '한국어', code: 'ko-KR', whisperCode: 'ko' },
-            'pt': { name: 'Português', code: 'pt-BR', whisperCode: 'pt' },
-            'ru': { name: 'Русский', code: 'ru-RU', whisperCode: 'ru' },
-            'ar': { name: 'العربية', code: 'ar-SA', whisperCode: 'ar' },
-            'it': { name: 'Italiano', code: 'it-IT', whisperCode: 'it' },
-            'nl': { name: 'Nederlands', code: 'nl-NL', whisperCode: 'nl' },
-            'pl': { name: 'Polski', code: 'pl-PL', whisperCode: 'pl' },
-            'tr': { name: 'Türkçe', code: 'tr-TR', whisperCode: 'tr' },
-            'hi': { name: 'हिन्दी', code: 'hi-IN', whisperCode: 'hi' }
+            'zh-CN': { name: '中文（简体）', voice: 'cmn-CN-Wavenet-A' },
+            'zh-TW': { name: '中文（繁体）', voice: 'cmn-TW-Wavenet-A' },
+            'en-US': { name: '英语（美国）', voice: 'en-US-Wavenet-D' },
+            'en-GB': { name: '英语（英国）', voice: 'en-GB-Wavenet-A' },
+            'ja-JP': { name: '日语', voice: 'ja-JP-Wavenet-A' },
+            'ko-KR': { name: '韩语', voice: 'ko-KR-Wavenet-A' },
+            'fr-FR': { name: '法语', voice: 'fr-FR-Wavenet-A' },
+            'de-DE': { name: '德语', voice: 'de-DE-Wavenet-A' },
+            'es-ES': { name: '西班牙语', voice: 'es-ES-Wavenet-A' },
+            'it-IT': { name: '意大利语', voice: 'it-IT-Wavenet-A' },
+            'pt-BR': { name: '葡萄牙语（巴西）', voice: 'pt-BR-Wavenet-A' },
+            'ru-RU': { name: '俄语', voice: 'ru-RU-Wavenet-A' },
+            'ar-XA': { name: '阿拉伯语', voice: 'ar-XA-Wavenet-A' },
+            'hi-IN': { name: '印地语', voice: 'hi-IN-Wavenet-A' },
+            'th-TH': { name: '泰语', voice: 'th-TH-Wavenet-A' },
+            'vi-VN': { name: '越南语', voice: 'vi-VN-Wavenet-A' }
         };
         
-        // 音频格式配置
+        // 音频处理配置
         this.audioConfig = {
+            maxFileSize: 10 * 1024 * 1024, // 10MB
+            supportedFormats: ['wav', 'mp3', 'ogg', 'webm', 'flac'],
             sampleRate: 16000,
-            channels: 1,
-            format: 'wav',
-            maxDuration: 300, // 5分钟
-            maxFileSize: 50 * 1024 * 1024 // 50MB
+            channels: 1
         };
         
-        // 缓存配置
-        this.cache = new Map();
-        this.cacheTimeout = 30 * 60 * 1000; // 30分钟
-        
-        this.initializeServices();
+        // 创建临时文件目录
+        this.tempDir = path.join(process.cwd(), 'temp', 'audio');
+        this.ensureTempDirectory();
     }
     
-    async initializeServices() {
+    /**
+     * 初始化Google Cloud服务
+     */
+    initializeGoogleCloudServices() {
         try {
-            // 检查Whisper服务可用性
-            if (this.speechProviders.whisper.url) {
-                try {
-                    await axios.get(this.speechProviders.whisper.url.replace('/asr', '/health'));
-                    console.log('Whisper语音识别服务已连接');
-                } catch (error) {
-                    console.warn('Whisper服务不可用，将使用备用方案');
-                }
+            const keyFilename = process.env.GOOGLE_CLOUD_KEY_FILE;
+            const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+            
+            if (!keyFilename || !projectId) {
+                console.warn('⚠️ Google Cloud配置不完整，语音功能可能受限');
+                return;
             }
             
-            // 检查翻译服务可用性
-            await this.testTranslationServices();
+            const config = {
+                projectId,
+                keyFilename
+            };
             
+            this.speechClient = new speech.SpeechClient(config);
+            this.ttsClient = new textToSpeech.TextToSpeechClient(config);
+            this.translateClient = new translate.Translate(config);
+            
+            console.log('✅ Google Cloud语音服务已初始化');
         } catch (error) {
-            console.error('初始化语音翻译服务失败:', error);
+            console.error('❌ Google Cloud服务初始化失败:', error);
         }
     }
     
     /**
-     * 测试翻译服务可用性
+     * 确保临时目录存在
      */
-    async testTranslationServices() {
-        for (const [provider, config] of Object.entries(this.translationProviders)) {
-            try {
-                if (provider === 'libre' && config.url) {
-                    const response = await axios.post(config.url, {
-                        q: 'hello',
-                        source: 'en',
-                        target: 'zh',
-                        format: 'text'
-                    }, {
-                        headers: config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {},
-                        timeout: 5000
-                    });
-                    
-                    if (response.data && response.data.translatedText) {
-                        console.log(`${provider}翻译服务可用`);
-                    }
-                }
-            } catch (error) {
-                console.warn(`${provider}翻译服务不可用:`, error.message);
-            }
-        }
-    }
-    
-    /**
-     * 处理语音消息
-     * @param {Buffer} audioBuffer 音频数据
-     * @param {string} sourceLanguage 源语言
-     * @param {string[]} targetLanguages 目标语言列表
-     * @param {string} userId 用户ID
-     * @param {string} roomId 房间ID
-     * @returns {Promise<Object>} 处理结果
-     */
-    async processVoiceMessage(audioBuffer, sourceLanguage = 'auto', targetLanguages = ['en'], userId, roomId) {
+    async ensureTempDirectory() {
         try {
-            // 验证音频数据
-            if (!audioBuffer || audioBuffer.length === 0) {
-                throw new Error('音频数据为空');
+            await fs.mkdir(this.tempDir, { recursive: true });
+        } catch (error) {
+            console.error('创建临时目录失败:', error);
+        }
+    }
+    
+    /**
+     * 处理语音消息（完整流程）
+     */
+    async processVoiceMessage(audioBuffer, sourceLanguage, targetLanguages, userId, chatRoomId) {
+        const startTime = Date.now();
+        let tempFiles = [];
+        
+        try {
+            // 1. 验证输入
+            this.validateInput(audioBuffer, targetLanguages);
+            
+            // 2. 预处理音频
+            const processedAudio = await this.preprocessAudio(audioBuffer);
+            tempFiles.push(processedAudio.filePath);
+            
+            // 3. 语音转文字
+            const transcription = await this.transcribeAudio(
+                processedAudio.buffer, 
+                sourceLanguage
+            );
+            
+            if (!transcription.text || transcription.text.trim().length === 0) {
+                throw new Error('无法识别语音内容，请重新录制');
             }
             
-            if (audioBuffer.length > this.audioConfig.maxFileSize) {
-                throw new Error('音频文件过大');
-            }
+            // 4. 文本翻译
+            const translations = await this.translateText(
+                transcription.text,
+                transcription.detectedLanguage || sourceLanguage,
+                targetLanguages
+            );
             
-            // 生成唯一ID
-            const translationId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            // 5. 文字转语音（为每种目标语言生成）
+            const audioTranslations = await this.generateAudioTranslations(
+                translations,
+                targetLanguages
+            );
             
-            // 保存原始音频文件
-            const audioPath = await this.saveAudioFile(audioBuffer, translationId);
-            
-            // 转换音频格式
-            const processedAudioPath = await this.convertAudio(audioPath);
-            
-            // 语音转文字
-            const transcriptionResult = await this.speechToText(processedAudioPath, sourceLanguage);
-            
-            if (!transcriptionResult.text || transcriptionResult.text.trim().length === 0) {
-                throw new Error('语音识别失败，未检测到有效文本');
-            }
-            
-            // 检测语言（如果是自动检测）
-            let detectedLanguage = sourceLanguage;
-            if (sourceLanguage === 'auto') {
-                detectedLanguage = await this.detectLanguage(transcriptionResult.text);
-            }
-            
-            // 翻译文本
-            const translations = [];
-            for (const targetLang of targetLanguages) {
-                if (targetLang !== detectedLanguage) {
-                    try {
-                        const translation = await this.translateText(
-                            transcriptionResult.text,
-                            detectedLanguage,
-                            targetLang
-                        );
-                        translations.push({
-                            language: targetLang,
-                            text: translation.text,
-                            confidence: translation.confidence || 0.8
-                        });
-                    } catch (error) {
-                        console.warn(`翻译到${targetLang}失败:`, error);
-                        translations.push({
-                            language: targetLang,
-                            text: transcriptionResult.text,
-                            confidence: 0.1,
-                            error: error.message
-                        });
-                    }
-                }
-            }
-            
-            // 生成翻译后的语音（可选）
-            const audioUrls = {};
-            for (const translation of translations) {
-                try {
-                    const audioUrl = await this.textToSpeech(
-                        translation.text,
-                        translation.language,
-                        translationId
-                    );
-                    audioUrls[translation.language] = audioUrl;
-                } catch (error) {
-                    console.warn(`生成${translation.language}语音失败:`, error);
-                }
-            }
-            
-            // 保存到数据库
-            const voiceTranslation = new VoiceTranslation({
-                user: userId,
-                chatRoom: roomId,
-                originalText: transcriptionResult.text,
-                originalLanguage: detectedLanguage,
-                originalAudioUrl: `/uploads/voice/${path.basename(audioPath)}`,
-                translations: translations.map(t => ({
-                    language: t.language,
-                    text: t.text,
-                    confidence: t.confidence,
-                    audioUrl: audioUrls[t.language] || null
-                })),
-                confidence: transcriptionResult.confidence || 0.8,
-                processingTime: Date.now() - parseInt(translationId.split('_')[1]),
-                metadata: {
-                    audioFormat: 'wav',
-                    sampleRate: this.audioConfig.sampleRate,
-                    duration: transcriptionResult.duration || 0,
-                    fileSize: audioBuffer.length
-                }
+            // 6. 保存翻译记录
+            const translationRecord = await this.saveTranslationRecord({
+                userId,
+                chatRoomId,
+                originalText: transcription.text,
+                sourceLanguage: transcription.detectedLanguage || sourceLanguage,
+                translations,
+                audioTranslations,
+                confidence: transcription.confidence,
+                processingTime: Date.now() - startTime
             });
             
-            await voiceTranslation.save();
-            
-            // 清理临时文件
-            this.cleanupTempFiles([audioPath, processedAudioPath]);
+            // 7. 清理临时文件
+            await this.cleanupTempFiles(tempFiles);
             
             return {
                 success: true,
                 data: {
-                    id: voiceTranslation._id,
-                    originalText: transcriptionResult.text,
-                    originalLanguage: detectedLanguage,
+                    id: translationRecord._id,
+                    originalText: transcription.text,
+                    sourceLanguage: transcription.detectedLanguage || sourceLanguage,
+                    confidence: transcription.confidence,
                     translations,
-                    confidence: transcriptionResult.confidence || 0.8,
-                    audioUrl: voiceTranslation.originalAudioUrl,
-                    audioUrls,
-                    duration: transcriptionResult.duration || 0,
-                    processingTime: voiceTranslation.processingTime
+                    audioTranslations,
+                    processingTime: Date.now() - startTime
                 }
             };
             
         } catch (error) {
-            console.error('处理语音消息失败:', error);
-            throw new ErrorResponse(`语音处理失败: ${error.message}`, 500);
-        }
-    }
-    
-    /**
-     * 语音转文字
-     * @param {string} audioPath 音频文件路径
-     * @param {string} language 语言代码
-     * @returns {Promise<Object>} 转录结果
-     */
-    async speechToText(audioPath, language = 'auto') {
-        try {
-            // 优先使用Whisper
-            if (this.speechProviders.whisper.url) {
-                return await this.whisperSpeechToText(audioPath, language);
-            }
-            
-            // 备用方案：Azure语音服务
-            if (this.speechProviders.azure.apiKey) {
-                return await this.azureSpeechToText(audioPath, language);
-            }
-            
-            // 最后备用方案：本地处理
-            return await this.localSpeechToText(audioPath, language);
-            
-        } catch (error) {
-            console.error('语音转文字失败:', error);
+            // 清理临时文件
+            await this.cleanupTempFiles(tempFiles);
             throw error;
         }
     }
     
     /**
-     * 使用Whisper进行语音识别
+     * 验证输入参数
      */
-    async whisperSpeechToText(audioPath, language) {
+    validateInput(audioBuffer, targetLanguages) {
+        if (!audioBuffer || audioBuffer.length === 0) {
+            throw new Error('音频数据为空');
+        }
+        
+        if (audioBuffer.length > this.audioConfig.maxFileSize) {
+            throw new Error(`音频文件过大，最大支持${this.audioConfig.maxFileSize / 1024 / 1024}MB`);
+        }
+        
+        if (!targetLanguages || !Array.isArray(targetLanguages) || targetLanguages.length === 0) {
+            throw new Error('请指定至少一种目标语言');
+        }
+        
+        // 验证目标语言是否支持
+        const unsupportedLanguages = targetLanguages.filter(
+            lang => !this.supportedLanguages[lang]
+        );
+        
+        if (unsupportedLanguages.length > 0) {
+            throw new Error(`不支持的语言: ${unsupportedLanguages.join(', ')}`);
+        }
+    }
+    
+    /**
+     * 预处理音频
+     */
+    async preprocessAudio(audioBuffer) {
+        const tempFileName = `audio_${crypto.randomUUID()}.wav`;
+        const tempFilePath = path.join(this.tempDir, tempFileName);
+        const outputFileName = `processed_${crypto.randomUUID()}.wav`;
+        const outputFilePath = path.join(this.tempDir, outputFileName);
+        
         try {
-            const formData = new FormData();
-            const audioBuffer = await fs.readFile(audioPath);
-            formData.append('audio_file', audioBuffer, 'audio.wav');
+            // 保存原始音频文件
+            await fs.writeFile(tempFilePath, audioBuffer);
             
-            if (language !== 'auto' && this.supportedLanguages[language]) {
-                formData.append('language', this.supportedLanguages[language].whisperCode);
-            }
-            
-            const response = await axios.post(this.speechProviders.whisper.url, formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data'
-                },
-                timeout: 30000
+            // 使用ffmpeg处理音频
+            await new Promise((resolve, reject) => {
+                ffmpeg(tempFilePath)
+                    .audioFrequency(this.audioConfig.sampleRate)
+                    .audioChannels(this.audioConfig.channels)
+                    .audioCodec('pcm_s16le')
+                    .format('wav')
+                    .on('end', resolve)
+                    .on('error', reject)
+                    .save(outputFilePath);
             });
             
-            if (response.data && response.data.text) {
-                return {
-                    text: response.data.text.trim(),
-                    confidence: response.data.confidence || 0.8,
-                    language: response.data.language || language,
-                    duration: response.data.duration || 0
+            // 读取处理后的音频
+            const processedBuffer = await fs.readFile(outputFilePath);
+            
+            return {
+                buffer: processedBuffer,
+                filePath: outputFilePath,
+                originalPath: tempFilePath
+            };
+            
+        } catch (error) {
+            console.error('音频预处理失败:', error);
+            throw new Error('音频格式处理失败，请检查音频文件');
+        }
+    }
+    
+    /**
+     * 语音转文字（增强版）
+     */
+    async transcribeAudio(audioBuffer, language = 'auto') {
+        if (!this.speechClient) {
+            throw new Error('语音识别服务未初始化');
+        }
+        
+        try {
+            // 配置识别请求
+            const request = {
+                audio: {
+                    content: audioBuffer.toString('base64')
+                },
+                config: {
+                    encoding: 'LINEAR16',
+                    sampleRateHertz: this.audioConfig.sampleRate,
+                    languageCode: language === 'auto' ? 'zh-CN' : language,
+                    alternativeLanguageCodes: language === 'auto' ? ['en-US', 'ja-JP', 'ko-KR'] : [],
+                    enableAutomaticPunctuation: true,
+                    enableWordTimeOffsets: true,
+                    enableWordConfidence: true,
+                    model: 'latest_long'
+                }
+            };
+            
+            // 执行语音识别
+            const [response] = await this.speechClient.recognize(request);
+            
+            if (!response.results || response.results.length === 0) {
+                throw new Error('无法识别语音内容');
+            }
+            
+            const result = response.results[0];
+            const alternative = result.alternatives[0];
+            
+            // 提取词语时间信息
+            const wordTimings = alternative.words ? alternative.words.map(word => ({
+                word: word.word,
+                startTime: word.startTime ? parseFloat(word.startTime.seconds || 0) + (word.startTime.nanos || 0) / 1e9 : 0,
+                endTime: word.endTime ? parseFloat(word.endTime.seconds || 0) + (word.endTime.nanos || 0) / 1e9 : 0,
+                confidence: word.confidence || 0
+            })) : [];
+            
+            return {
+                text: alternative.transcript,
+                confidence: alternative.confidence || 0,
+                detectedLanguage: result.languageCode || language,
+                wordTimings
+            };
+            
+        } catch (error) {
+            console.error('语音识别失败:', error);
+            throw new Error('语音识别失败，请重新尝试');
+        }
+    }
+    
+    /**
+     * 文本翻译（批量）
+     */
+    async translateText(text, sourceLanguage, targetLanguages) {
+        if (!this.translateClient) {
+            throw new Error('翻译服务未初始化');
+        }
+        
+        try {
+            const translations = {};
+            
+            // 并行翻译到所有目标语言
+            const translationPromises = targetLanguages.map(async (targetLang) => {
+                if (targetLang === sourceLanguage) {
+                    translations[targetLang] = {
+                        text: text,
+                        confidence: 1.0,
+                        isOriginal: true
+                    };
+                    return;
+                }
+                
+                try {
+                    const [translation] = await this.translateClient.translate(text, {
+                        from: sourceLanguage,
+                        to: targetLang
+                    });
+                    
+                    translations[targetLang] = {
+                        text: translation,
+                        confidence: 0.9, // Google Translate通常有较高的准确性
+                        isOriginal: false
+                    };
+                } catch (error) {
+                    console.error(`翻译到${targetLang}失败:`, error);
+                    translations[targetLang] = {
+                        text: text, // 翻译失败时返回原文
+                        confidence: 0,
+                        isOriginal: true,
+                        error: error.message
+                    };
+                }
+            });
+            
+            await Promise.all(translationPromises);
+            
+            return translations;
+            
+        } catch (error) {
+            console.error('批量翻译失败:', error);
+            throw new Error('翻译服务暂时不可用');
+        }
+    }
+    
+    /**
+     * 生成音频翻译
+     */
+    async generateAudioTranslations(translations, targetLanguages) {
+        if (!this.ttsClient) {
+            console.warn('语音合成服务未初始化，跳过音频生成');
+            return {};
+        }
+        
+        const audioTranslations = {};
+        
+        // 并行生成所有语言的音频
+        const audioPromises = targetLanguages.map(async (language) => {
+            const translation = translations[language];
+            if (!translation || !translation.text) return;
+            
+            try {
+                const audioBuffer = await this.synthesizeSpeech(
+                    translation.text,
+                    language,
+                    'neutral'
+                );
+                
+                // 将音频保存为base64编码
+                audioTranslations[language] = {
+                    audioData: audioBuffer.toString('base64'),
+                    mimeType: 'audio/mpeg',
+                    duration: this.estimateAudioDuration(translation.text, language)
+                };
+                
+            } catch (error) {
+                console.error(`生成${language}音频失败:`, error);
+                audioTranslations[language] = {
+                    error: error.message
                 };
             }
-            
-            throw new Error('Whisper返回无效结果');
-            
-        } catch (error) {
-            console.error('Whisper语音识别失败:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * 文本翻译
-     * @param {string} text 待翻译文本
-     * @param {string} sourceLanguage 源语言
-     * @param {string} targetLanguage 目标语言
-     * @returns {Promise<Object>} 翻译结果
-     */
-    async translateText(text, sourceLanguage, targetLanguage) {
-        try {
-            // 检查缓存
-            const cacheKey = `${text}_${sourceLanguage}_${targetLanguage}`;
-            if (this.cache.has(cacheKey)) {
-                const cached = this.cache.get(cacheKey);
-                if (Date.now() - cached.timestamp < this.cacheTimeout) {
-                    return cached.data;
-                }
-                this.cache.delete(cacheKey);
-            }
-            
-            let result = null;
-            
-            // 尝试LibreTranslate
-            if (this.translationProviders.libre.url) {
-                try {
-                    result = await this.libreTranslate(text, sourceLanguage, targetLanguage);
-                } catch (error) {
-                    console.warn('LibreTranslate失败:', error.message);
-                }
-            }
-            
-            // 备用方案：MyMemory
-            if (!result) {
-                try {
-                    result = await this.myMemoryTranslate(text, sourceLanguage, targetLanguage);
-                } catch (error) {
-                    console.warn('MyMemory翻译失败:', error.message);
-                }
-            }
-            
-            // 最后备用方案：Azure翻译
-            if (!result && this.translationProviders.azure.apiKey) {
-                try {
-                    result = await this.azureTranslate(text, sourceLanguage, targetLanguage);
-                } catch (error) {
-                    console.warn('Azure翻译失败:', error.message);
-                }
-            }
-            
-            if (!result) {
-                throw new Error('所有翻译服务都不可用');
-            }
-            
-            // 缓存结果
-            this.cache.set(cacheKey, {
-                data: result,
-                timestamp: Date.now()
-            });
-            
-            return result;
-            
-        } catch (error) {
-            console.error('文本翻译失败:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * LibreTranslate翻译
-     */
-    async libreTranslate(text, sourceLanguage, targetLanguage) {
-        const response = await axios.post(this.translationProviders.libre.url, {
-            q: text,
-            source: sourceLanguage === 'auto' ? 'auto' : sourceLanguage,
-            target: targetLanguage,
-            format: 'text'
-        }, {
-            headers: this.translationProviders.libre.apiKey ? {
-                'Authorization': `Bearer ${this.translationProviders.libre.apiKey}`
-            } : {},
-            timeout: 10000
         });
         
-        if (response.data && response.data.translatedText) {
-            return {
-                text: response.data.translatedText,
-                confidence: 0.8,
-                provider: 'libre'
-            };
-        }
+        await Promise.all(audioPromises);
         
-        throw new Error('LibreTranslate返回无效结果');
+        return audioTranslations;
     }
     
     /**
-     * MyMemory翻译
+     * 语音合成（增强版）
      */
-    async myMemoryTranslate(text, sourceLanguage, targetLanguage) {
-        const langPair = `${sourceLanguage}|${targetLanguage}`;
-        const params = {
-            q: text,
-            langpair: langPair
+    async synthesizeSpeech(text, language, voiceType = 'neutral') {
+        if (!this.ttsClient) {
+            throw new Error('语音合成服务未初始化');
+        }
+        
+        try {
+            const languageConfig = this.supportedLanguages[language];
+            if (!languageConfig) {
+                throw new Error(`不支持的语言: ${language}`);
+            }
+            
+            // 选择语音类型
+            let voiceName = languageConfig.voice;
+            if (voiceType === 'male') {
+                voiceName = voiceName.replace('-A', '-B');
+            } else if (voiceType === 'female') {
+                voiceName = voiceName.replace('-B', '-A');
+            }
+            
+            const request = {
+                input: { text },
+                voice: {
+                    languageCode: language,
+                    name: voiceName,
+                    ssmlGender: voiceType === 'male' ? 'MALE' : 'FEMALE'
+                },
+                audioConfig: {
+                    audioEncoding: 'MP3',
+                    speakingRate: 1.0,
+                    pitch: 0.0,
+                    volumeGainDb: 0.0
+                }
+            };
+            
+            const [response] = await this.ttsClient.synthesizeSpeech(request);
+            
+            return response.audioContent;
+            
+        } catch (error) {
+            console.error('语音合成失败:', error);
+            throw new Error('语音合成失败，请重新尝试');
+        }
+    }
+    
+    /**
+     * 估算音频时长
+     */
+    estimateAudioDuration(text, language) {
+        // 基于文本长度和语言特性估算时长（秒）
+        const baseRate = {
+            'zh-CN': 3.5, // 中文每秒约3.5个字符
+            'en-US': 12,  // 英文每秒约12个字符
+            'ja-JP': 4,   // 日文每秒约4个字符
+            'ko-KR': 4    // 韩文每秒约4个字符
         };
         
-        if (this.translationProviders.mymemory.email) {
-            params.de = this.translationProviders.mymemory.email;
-        }
-        
-        const response = await axios.get(this.translationProviders.mymemory.url, {
-            params,
-            timeout: 10000
-        });
-        
-        if (response.data && response.data.responseData && response.data.responseData.translatedText) {
-            return {
-                text: response.data.responseData.translatedText,
-                confidence: response.data.responseData.match || 0.7,
-                provider: 'mymemory'
-            };
-        }
-        
-        throw new Error('MyMemory返回无效结果');
+        const rate = baseRate[language] || 8; // 默认每秒8个字符
+        return Math.ceil(text.length / rate);
     }
     
     /**
-     * 语言检测
+     * 保存翻译记录
      */
-    async detectLanguage(text) {
+    async saveTranslationRecord(data) {
         try {
-            // 简单的语言检测逻辑
-            const chineseRegex = /[\u4e00-\u9fff]/;
-            const arabicRegex = /[\u0600-\u06ff]/;
-            const japaneseRegex = /[\u3040-\u309f\u30a0-\u30ff]/;
-            const koreanRegex = /[\uac00-\ud7af]/;
+            const record = new VoiceTranslation({
+                user: data.userId,
+                chatRoom: data.chatRoomId,
+                originalText: data.originalText,
+                sourceLanguage: data.sourceLanguage,
+                translations: data.translations,
+                audioTranslations: data.audioTranslations,
+                confidence: data.confidence,
+                processingTime: data.processingTime,
+                processingStatus: 'completed'
+            });
             
-            if (chineseRegex.test(text)) return 'zh';
-            if (arabicRegex.test(text)) return 'ar';
-            if (japaneseRegex.test(text)) return 'ja';
-            if (koreanRegex.test(text)) return 'ko';
+            await record.save();
             
-            // 默认返回英语
-            return 'en';
+            // 更新用户统计
+            await this.updateUserTranslationStats(data.userId);
+            
+            return record;
+            
         } catch (error) {
-            console.warn('语言检测失败:', error);
-            return 'en';
+            console.error('保存翻译记录失败:', error);
+            throw new Error('保存翻译记录失败');
         }
     }
     
     /**
-     * 文本转语音
+     * 更新用户翻译统计
      */
-    async textToSpeech(text, language, translationId) {
+    async updateUserTranslationStats(userId) {
         try {
-            // 这里可以集成TTS服务，暂时返回null
-            console.log(`TTS请求: ${text} (${language})`);
-            return null;
+            const user = await User.findById(userId);
+            if (!user) return;
+            
+            // 增加翻译计数
+            user.translationCount = (user.translationCount || 0) + 1;
+            user.lastTranslationAt = new Date();
+            
+            await user.save();
+            
         } catch (error) {
-            console.error('文本转语音失败:', error);
-            return null;
+            console.error('更新用户翻译统计失败:', error);
         }
     }
     
     /**
-     * 保存音频文件
+     * 获取用户翻译历史
      */
-    async saveAudioFile(audioBuffer, translationId) {
-        const uploadDir = path.join(__dirname, '../../uploads/voice');
-        await fs.mkdir(uploadDir, { recursive: true });
-        
-        const filename = `${translationId}_original.wav`;
-        const filepath = path.join(uploadDir, filename);
-        
-        await fs.writeFile(filepath, audioBuffer);
-        return filepath;
+    async getUserVoiceTranslations(userId, limit = 20, skip = 0) {
+        try {
+            const translations = await VoiceTranslation.find({ user: userId })
+                .sort({ createdAt: -1 })
+                .limit(limit)
+                .skip(skip)
+                .populate('chatRoom', 'name type')
+                .select('-audioTranslations'); // 不返回音频数据以节省带宽
+            
+            return translations;
+            
+        } catch (error) {
+            console.error('获取用户翻译历史失败:', error);
+            throw new Error('获取翻译历史失败');
+        }
     }
     
     /**
-     * 转换音频格式
+     * 删除翻译记录
      */
-    async convertAudio(inputPath) {
-        return new Promise((resolve, reject) => {
-            const outputPath = inputPath.replace('.wav', '_processed.wav');
+    async deleteVoiceTranslation(translationId, userId) {
+        try {
+            const translation = await VoiceTranslation.findOne({
+                _id: translationId,
+                user: userId
+            });
             
-            ffmpeg(inputPath)
-                .audioFrequency(this.audioConfig.sampleRate)
-                .audioChannels(this.audioConfig.channels)
-                .audioCodec('pcm_s16le')
-                .format('wav')
-                .on('end', () => resolve(outputPath))
-                .on('error', reject)
-                .save(outputPath);
-        });
+            if (!translation) {
+                throw new Error('翻译记录不存在或无权限删除');
+            }
+            
+            await translation.deleteOne();
+            
+        } catch (error) {
+            console.error('删除翻译记录失败:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 获取支持的语言列表
+     */
+    getSupportedLanguages() {
+        return Object.entries(this.supportedLanguages).map(([code, config]) => ({
+            code,
+            name: config.name,
+            hasVoice: !!config.voice
+        }));
     }
     
     /**
@@ -521,54 +551,63 @@ class EnhancedVoiceTranslationService {
             try {
                 await fs.unlink(filePath);
             } catch (error) {
-                console.warn(`清理文件失败: ${filePath}`, error);
+                console.warn(`清理临时文件失败: ${filePath}`, error);
             }
         }
     }
     
     /**
-     * 获取支持的语言列表
+     * 健康检查
      */
-    getSupportedLanguages() {
-        return this.supportedLanguages;
-    }
-    
-    /**
-     * 获取服务状态
-     */
-    async getServiceStatus() {
+    async healthCheck() {
         const status = {
-            whisper: false,
-            libre: false,
-            mymemory: false,
-            azure: false
+            speechRecognition: !!this.speechClient,
+            textToSpeech: !!this.ttsClient,
+            translation: !!this.translateClient,
+            tempDirectory: false
         };
         
-        // 检查各服务状态
         try {
-            if (this.speechProviders.whisper.url) {
-                await axios.get(this.speechProviders.whisper.url.replace('/asr', '/health'), { timeout: 3000 });
-                status.whisper = true;
-            }
+            // 检查临时目录
+            await fs.access(this.tempDir);
+            status.tempDirectory = true;
         } catch (error) {
-            // Whisper不可用
-        }
-        
-        try {
-            if (this.translationProviders.libre.url) {
-                await axios.post(this.translationProviders.libre.url, {
-                    q: 'test',
-                    source: 'en',
-                    target: 'zh',
-                    format: 'text'
-                }, { timeout: 3000 });
-                status.libre = true;
-            }
-        } catch (error) {
-            // LibreTranslate不可用
+            console.warn('临时目录不可访问:', error);
         }
         
         return status;
+    }
+    
+    /**
+     * 获取服务统计信息
+     */
+    async getServiceStats() {
+        try {
+            const stats = await VoiceTranslation.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalTranslations: { $sum: 1 },
+                        avgConfidence: { $avg: '$confidence' },
+                        avgProcessingTime: { $avg: '$processingTime' },
+                        languageDistribution: {
+                            $push: '$sourceLanguage'
+                        }
+                    }
+                }
+            ]);
+            
+            return stats[0] || {
+                totalTranslations: 0,
+                avgConfidence: 0,
+                avgProcessingTime: 0,
+                languageDistribution: []
+            };
+            
+        } catch (error) {
+            console.error('获取服务统计失败:', error);
+            return null;
+        }
     }
 }
 

@@ -1,354 +1,435 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
- * @title CultureBridge Token (CBT)
- * @dev ERC20代币合约，用于CultureBridge平台的文化交流和语言学习激励
+ * @title CultureBridgeToken (CBT)
+ * @dev 文化桥梁代币 - 支持文化交流激励的ERC20代币
+ * @author CultureBridge Team
  */
-contract CultureBridgeToken is ERC20, ERC20Burnable, Pausable, Ownable, ReentrancyGuard {
+contract CultureBridgeToken is 
+    Initializable,
+    ERC20Upgradeable,
+    ERC20BurnableUpgradeable,
+    ERC20PausableUpgradeable,
+    AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable,
+    UUPSUpgradeable
+{
+    // 角色定义
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+    bytes32 public constant REWARD_DISTRIBUTOR_ROLE = keccak256("REWARD_DISTRIBUTOR_ROLE");
+
+    // 常量
+    uint256 public constant MAX_SUPPLY = 1_000_000_000 * 10**18; // 10亿代币
+    uint256 public constant INITIAL_SUPPLY = 100_000_000 * 10**18; // 1亿初始供应量
     
-    // 代币基本信息
-    uint256 public constant INITIAL_SUPPLY = 1000000000 * 10**18; // 10亿CBT
-    uint256 public constant MAX_SUPPLY = 10000000000 * 10**18; // 最大供应量100亿CBT
-    
-    // 交易计数器
-    uint256 private _transactionCounter;
-    
-    // 交易结构体
+    // 交易类别枚举
+    enum TransactionCategory {
+        GENERAL,
+        LEARNING_REWARD,
+        CULTURAL_EXCHANGE,
+        CONTENT_CREATION,
+        COMMUNITY_CONTRIBUTION,
+        MARKETPLACE_PURCHASE,
+        GOVERNANCE_PARTICIPATION
+    }
+
+    // 文化交流交易结构
     struct CulturalTransaction {
         uint256 id;
         address from;
         address to;
         uint256 amount;
         string purpose;
-        string category;
+        TransactionCategory category;
         string[] tags;
         uint256 timestamp;
         bool isReward;
     }
-    
-    // 用户奖励历史
-    struct UserReward {
-        uint256 amount;
-        string reason;
-        string category;
-        uint256 timestamp;
-        uint256 transactionId;
+
+    // 用户统计结构
+    struct UserStats {
+        uint256 totalEarned;
+        uint256 totalSpent;
+        uint256 totalTransactions;
+        uint256 lastActivityTime;
+        mapping(TransactionCategory => uint256) categoryStats;
     }
-    
-    // 存储所有交易
+
+    // 奖励配置结构
+    struct RewardConfig {
+        uint256 dailyLearningReward;
+        uint256 contentCreationReward;
+        uint256 culturalExchangeReward;
+        uint256 communityContributionReward;
+        uint256 referralReward;
+        bool isActive;
+    }
+
+    // 状态变量
+    uint256 private _transactionCounter;
     mapping(uint256 => CulturalTransaction) public transactions;
-    
-    // 用户交易历史
     mapping(address => uint256[]) public userTransactions;
+    mapping(address => UserStats) public userStats;
+    mapping(address => bool) public verifiedUsers;
+    mapping(address => uint256) public lastRewardTime;
     
-    // 用户奖励历史
-    mapping(address => UserReward[]) public userRewards;
-    
-    // 类别统计
-    mapping(string => uint256) public categoryTotals;
+    RewardConfig public rewardConfig;
+    uint256 public totalRewardsDistributed;
+    uint256 public burnedTokens;
     
     // 每日奖励限制
-    mapping(address => mapping(uint256 => uint256)) public dailyRewards;
-    uint256 public constant DAILY_REWARD_LIMIT = 100 * 10**18; // 每日最多奖励100 CBT
-    
-    // 管理员地址
-    mapping(address => bool) public administrators;
-    
+    mapping(address => mapping(uint256 => uint256)) public dailyRewards; // user => day => amount
+    uint256 public constant MAX_DAILY_REWARD = 100 * 10**18; // 每日最大奖励100 CBT
+
     // 事件定义
-    event CulturalTransaction(
-        uint256 indexed id,
+    event CulturalTransactionCreated(
+        uint256 indexed transactionId,
         address indexed from,
         address indexed to,
         uint256 amount,
         string purpose,
-        string category
+        TransactionCategory category
     );
     
-    event TokensAwarded(
+    event RewardDistributed(
         address indexed recipient,
         uint256 amount,
         string reason,
-        string category
+        TransactionCategory category
     );
     
-    event AdministratorAdded(address indexed admin);
-    event AdministratorRemoved(address indexed admin);
-    
-    // 修饰符
-    modifier onlyAdmin() {
-        require(administrators[msg.sender] || msg.sender == owner(), "Not authorized");
-        _;
+    event UserVerified(address indexed user, uint256 timestamp);
+    event RewardConfigUpdated(RewardConfig newConfig);
+    event TokensBurned(address indexed burner, uint256 amount);
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
     }
-    
-    modifier validAddress(address _address) {
-        require(_address != address(0), "Invalid address");
-        _;
-    }
-    
-    constructor() ERC20("CultureBridge Token", "CBT") {
-        _mint(msg.sender, INITIAL_SUPPLY);
-        administrators[msg.sender] = true;
-        _transactionCounter = 0;
-    }
-    
+
     /**
-     * @dev 添加管理员
+     * @dev 初始化合约
      */
-    function addAdministrator(address _admin) external onlyOwner validAddress(_admin) {
-        administrators[_admin] = true;
-        emit AdministratorAdded(_admin);
+    function initialize(address admin) public initializer {
+        __ERC20_init("CultureBridge Token", "CBT");
+        __ERC20Burnable_init();
+        __ERC20Pausable_init();
+        __AccessControl_init();
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+
+        // 设置角色
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(ADMIN_ROLE, admin);
+        _grantRole(MINTER_ROLE, admin);
+        _grantRole(PAUSER_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, admin);
+        _grantRole(REWARD_DISTRIBUTOR_ROLE, admin);
+
+        // 铸造初始供应量
+        _mint(admin, INITIAL_SUPPLY);
+
+        // 初始化奖励配置
+        rewardConfig = RewardConfig({
+            dailyLearningReward: 5 * 10**18,
+            contentCreationReward: 10 * 10**18,
+            culturalExchangeReward: 3 * 10**18,
+            communityContributionReward: 2 * 10**18,
+            referralReward: 5 * 10**18,
+            isActive: true
+        });
     }
-    
-    /**
-     * @dev 移除管理员
-     */
-    function removeAdministrator(address _admin) external onlyOwner validAddress(_admin) {
-        administrators[_admin] = false;
-        emit AdministratorRemoved(_admin);
-    }
-    
+
     /**
      * @dev 带目的的代币转账
      */
     function transferWithPurpose(
-        address _to,
-        uint256 _amount,
-        string memory _purpose,
-        string memory _category,
-        string[] memory _tags
-    ) external whenNotPaused nonReentrant validAddress(_to) returns (uint256) {
-        require(_amount > 0, "Amount must be greater than 0");
-        require(bytes(_purpose).length > 0, "Purpose cannot be empty");
-        require(balanceOf(msg.sender) >= _amount, "Insufficient balance");
-        
+        address to,
+        uint256 amount,
+        string memory purpose,
+        TransactionCategory category,
+        string[] memory tags
+    ) public nonReentrant returns (uint256) {
+        require(to != address(0), "CBT: transfer to zero address");
+        require(amount > 0, "CBT: amount must be greater than 0");
+        require(bytes(purpose).length > 0, "CBT: purpose cannot be empty");
+
         // 执行转账
-        _transfer(msg.sender, _to, _amount);
-        
-        // 记录交易
-        _transactionCounter++;
-        uint256 transactionId = _transactionCounter;
-        
-        transactions[transactionId] = CulturalTransaction({
-            id: transactionId,
-            from: msg.sender,
-            to: _to,
-            amount: _amount,
-            purpose: _purpose,
-            category: _category,
-            tags: _tags,
-            timestamp: block.timestamp,
-            isReward: false
-        });
-        
-        // 更新用户交易历史
-        userTransactions[msg.sender].push(transactionId);
-        userTransactions[_to].push(transactionId);
-        
-        // 更新类别统计
-        categoryTotals[_category] += _amount;
-        
-        emit CulturalTransaction(transactionId, msg.sender, _to, _amount, _purpose, _category);
-        
+        _transfer(_msgSender(), to, amount);
+
+        // 记录文化交流交易
+        uint256 transactionId = _createCulturalTransaction(
+            _msgSender(),
+            to,
+            amount,
+            purpose,
+            category,
+            tags,
+            false
+        );
+
+        // 更新用户统计
+        _updateUserStats(_msgSender(), amount, true, category);
+        _updateUserStats(to, amount, false, category);
+
         return transactionId;
     }
-    
+
     /**
-     * @dev 奖励代币给用户
+     * @dev 分发奖励代币
      */
-    function awardTokens(
-        address _to,
-        uint256 _amount,
-        string memory _reason,
-        string memory _category
-    ) external onlyAdmin whenNotPaused nonReentrant validAddress(_to) {
-        require(_amount > 0, "Amount must be greater than 0");
-        require(bytes(_reason).length > 0, "Reason cannot be empty");
-        
+    function distributeReward(
+        address recipient,
+        uint256 amount,
+        string memory reason,
+        TransactionCategory category
+    ) public onlyRole(REWARD_DISTRIBUTOR_ROLE) nonReentrant {
+        require(recipient != address(0), "CBT: reward to zero address");
+        require(amount > 0, "CBT: reward amount must be greater than 0");
+        require(rewardConfig.isActive, "CBT: rewards are not active");
+
         // 检查每日奖励限制
-        uint256 today = block.timestamp / 86400; // 获取当前日期
+        uint256 today = block.timestamp / 86400; // 当前天数
         require(
-            dailyRewards[_to][today] + _amount <= DAILY_REWARD_LIMIT,
-            "Daily reward limit exceeded"
+            dailyRewards[recipient][today] + amount <= MAX_DAILY_REWARD,
+            "CBT: daily reward limit exceeded"
         );
-        
-        // 检查最大供应量
-        require(totalSupply() + _amount <= MAX_SUPPLY, "Max supply exceeded");
-        
-        // 铸造代币
-        _mint(_to, _amount);
-        
+
+        // 检查供应量限制
+        require(
+            totalSupply() + amount <= MAX_SUPPLY,
+            "CBT: would exceed max supply"
+        );
+
+        // 铸造奖励代币
+        _mint(recipient, amount);
+
         // 更新每日奖励记录
-        dailyRewards[_to][today] += _amount;
-        
-        // 记录交易
-        _transactionCounter++;
-        uint256 transactionId = _transactionCounter;
-        
-        transactions[transactionId] = CulturalTransaction({
-            id: transactionId,
-            from: address(0),
-            to: _to,
-            amount: _amount,
-            purpose: _reason,
-            category: _category,
-            tags: new string[](0),
-            timestamp: block.timestamp,
-            isReward: true
-        });
-        
-        // 记录用户奖励历史
-        userRewards[_to].push(UserReward({
-            amount: _amount,
-            reason: _reason,
-            category: _category,
-            timestamp: block.timestamp,
-            transactionId: transactionId
-        }));
-        
-        // 更新用户交易历史
-        userTransactions[_to].push(transactionId);
-        
-        // 更新类别统计
-        categoryTotals[_category] += _amount;
-        
-        emit TokensAwarded(_to, _amount, _reason, _category);
-        emit CulturalTransaction(transactionId, address(0), _to, _amount, _reason, _category);
+        dailyRewards[recipient][today] += amount;
+        totalRewardsDistributed += amount;
+
+        // 记录奖励交易
+        uint256 transactionId = _createCulturalTransaction(
+            address(0),
+            recipient,
+            amount,
+            reason,
+            category,
+            new string[](0),
+            true
+        );
+
+        // 更新用户统计
+        _updateUserStats(recipient, amount, false, category);
+
+        emit RewardDistributed(recipient, amount, reason, category);
     }
-    
+
+    /**
+     * @dev 批量分发奖励
+     */
+    function batchDistributeRewards(
+        address[] memory recipients,
+        uint256[] memory amounts,
+        string[] memory reasons,
+        TransactionCategory category
+    ) public onlyRole(REWARD_DISTRIBUTOR_ROLE) {
+        require(
+            recipients.length == amounts.length && amounts.length == reasons.length,
+            "CBT: arrays length mismatch"
+        );
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            distributeReward(recipients[i], amounts[i], reasons[i], category);
+        }
+    }
+
+    /**
+     * @dev 验证用户身份
+     */
+    function verifyUser(address user) public onlyRole(ADMIN_ROLE) {
+        require(!verifiedUsers[user], "CBT: user already verified");
+        verifiedUsers[user] = true;
+        emit UserVerified(user, block.timestamp);
+    }
+
+    /**
+     * @dev 更新奖励配置
+     */
+    function updateRewardConfig(RewardConfig memory newConfig) public onlyRole(ADMIN_ROLE) {
+        rewardConfig = newConfig;
+        emit RewardConfigUpdated(newConfig);
+    }
+
+    /**
+     * @dev 获取用户交易历史
+     */
+    function getUserTransactions(address user) public view returns (uint256[] memory) {
+        return userTransactions[user];
+    }
+
     /**
      * @dev 获取交易详情
      */
-    function getTransaction(uint256 _id) external view returns (
-        uint256 id,
+    function getTransaction(uint256 transactionId) public view returns (CulturalTransaction memory) {
+        require(transactionId <= _transactionCounter, "CBT: transaction does not exist");
+        return transactions[transactionId];
+    }
+
+    /**
+     * @dev 获取用户统计信息
+     */
+    function getUserStats(address user) public view returns (
+        uint256 totalEarned,
+        uint256 totalSpent,
+        uint256 totalTransactions,
+        uint256 lastActivityTime
+    ) {
+        UserStats storage stats = userStats[user];
+        return (
+            stats.totalEarned,
+            stats.totalSpent,
+            stats.totalTransactions,
+            stats.lastActivityTime
+        );
+    }
+
+    /**
+     * @dev 获取用户分类统计
+     */
+    function getUserCategoryStats(address user, TransactionCategory category) public view returns (uint256) {
+        return userStats[user].categoryStats[category];
+    }
+
+    /**
+     * @dev 获取用户今日已获得奖励
+     */
+    function getTodayRewards(address user) public view returns (uint256) {
+        uint256 today = block.timestamp / 86400;
+        return dailyRewards[user][today];
+    }
+
+    /**
+     * @dev 销毁代币并记录
+     */
+    function burn(uint256 amount) public override {
+        super.burn(amount);
+        burnedTokens += amount;
+        emit TokensBurned(_msgSender(), amount);
+    }
+
+    /**
+     * @dev 暂停合约
+     */
+    function pause() public onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /**
+     * @dev 恢复合约
+     */
+    function unpause() public onlyRole(PAUSER_ROLE) {
+        _unpause();
+    }
+
+    /**
+     * @dev 创建文化交流交易记录
+     */
+    function _createCulturalTransaction(
         address from,
         address to,
         uint256 amount,
         string memory purpose,
-        uint256 timestamp,
-        string memory category,
+        TransactionCategory category,
         string[] memory tags,
         bool isReward
-    ) {
-        CulturalTransaction memory txn = transactions[_id];
-        return (
-            txn.id,
-            txn.from,
-            txn.to,
-            txn.amount,
-            txn.purpose,
-            txn.timestamp,
-            txn.category,
-            txn.tags,
-            txn.isReward
+    ) internal returns (uint256) {
+        _transactionCounter++;
+        
+        transactions[_transactionCounter] = CulturalTransaction({
+            id: _transactionCounter,
+            from: from,
+            to: to,
+            amount: amount,
+            purpose: purpose,
+            category: category,
+            tags: tags,
+            timestamp: block.timestamp,
+            isReward: isReward
+        });
+
+        if (from != address(0)) {
+            userTransactions[from].push(_transactionCounter);
+        }
+        userTransactions[to].push(_transactionCounter);
+
+        emit CulturalTransactionCreated(
+            _transactionCounter,
+            from,
+            to,
+            amount,
+            purpose,
+            category
         );
-    }
-    
-    /**
-     * @dev 获取用户交易历史
-     */
-    function getUserTransactions(address _user) external view returns (uint256[] memory) {
-        return userTransactions[_user];
-    }
-    
-    /**
-     * @dev 获取用户奖励历史
-     */
-    function getUserRewards(address _user) external view returns (UserReward[] memory) {
-        return userRewards[_user];
-    }
-    
-    /**
-     * @dev 获取用户今日已获得奖励
-     */
-    function getTodayRewards(address _user) external view returns (uint256) {
-        uint256 today = block.timestamp / 86400;
-        return dailyRewards[_user][today];
-    }
-    
-    /**
-     * @dev 获取类别总量
-     */
-    function getCategoryTotal(string memory _category) external view returns (uint256) {
-        return categoryTotals[_category];
-    }
-    
-    /**
-     * @dev 获取交易总数
-     */
-    function getTransactionCount() external view returns (uint256) {
+
         return _transactionCounter;
     }
-    
+
     /**
-     * @dev 批量奖励代币
+     * @dev 更新用户统计信息
      */
-    function batchAwardTokens(
-        address[] memory _recipients,
-        uint256[] memory _amounts,
-        string[] memory _reasons,
-        string memory _category
-    ) external onlyAdmin whenNotPaused nonReentrant {
-        require(_recipients.length == _amounts.length, "Arrays length mismatch");
-        require(_recipients.length == _reasons.length, "Arrays length mismatch");
-        require(_recipients.length > 0, "Empty arrays");
+    function _updateUserStats(
+        address user,
+        uint256 amount,
+        bool isSpending,
+        TransactionCategory category
+    ) internal {
+        UserStats storage stats = userStats[user];
         
-        for (uint256 i = 0; i < _recipients.length; i++) {
-            if (_recipients[i] != address(0) && _amounts[i] > 0) {
-                // 检查每日奖励限制
-                uint256 today = block.timestamp / 86400;
-                if (dailyRewards[_recipients[i]][today] + _amounts[i] <= DAILY_REWARD_LIMIT) {
-                    // 检查最大供应量
-                    if (totalSupply() + _amounts[i] <= MAX_SUPPLY) {
-                        _mint(_recipients[i], _amounts[i]);
-                        dailyRewards[_recipients[i]][today] += _amounts[i];
-                        
-                        // 记录奖励历史
-                        userRewards[_recipients[i]].push(UserReward({
-                            amount: _amounts[i],
-                            reason: _reasons[i],
-                            category: _category,
-                            timestamp: block.timestamp,
-                            transactionId: _transactionCounter + 1
-                        }));
-                        
-                        emit TokensAwarded(_recipients[i], _amounts[i], _reasons[i], _category);
-                    }
-                }
-            }
+        if (isSpending) {
+            stats.totalSpent += amount;
+        } else {
+            stats.totalEarned += amount;
         }
+        
+        stats.totalTransactions++;
+        stats.lastActivityTime = block.timestamp;
+        stats.categoryStats[category] += amount;
     }
-    
+
     /**
-     * @dev 暂停合约
+     * @dev 重写转账前检查
      */
-    function pause() external onlyOwner {
-        _pause();
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal override(ERC20Upgradeable, ERC20PausableUpgradeable) {
+        super._beforeTokenTransfer(from, to, amount);
     }
-    
+
     /**
-     * @dev 恢复合约
+     * @dev 授权升级
      */
-    function unpause() external onlyOwner {
-        _unpause();
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+
+    /**
+     * @dev 获取合约版本
+     */
+    function version() public pure returns (string memory) {
+        return "1.0.0";
     }
-    
-    /**
-     * @dev 紧急提取BNB
-     */
-    function emergencyWithdraw() external onlyOwner {
-        payable(owner()).transfer(address(this).balance);
-    }
-    
-    /**
-     * @dev 接收BNB
-     */
-    receive() external payable {}
 }
 
