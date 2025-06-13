@@ -229,18 +229,35 @@ class EnhancedBlockchainService {
      * 启动事件监听
      */
     startEventListening() {
-        if (!this.cbtTokenContract) return;
+        if (!this.cbtTokenContract) {
+            console.warn('⚠️ CBT代币合约未初始化，跳过事件监听');
+            return;
+        }
         
         try {
+            // 检查合约是否有 events 属性
+            if (!this.cbtTokenContract.events) {
+                console.warn('⚠️ 合约事件接口不可用，跳过事件监听');
+                return;
+            }
+            
             // 监听文化交流交易事件
-            this.cbtTokenContract.events.CulturalTransactionCreated()
-                .on('data', this.handleCulturalTransactionEvent.bind(this))
-                .on('error', console.error);
+            if (this.cbtTokenContract.events.CulturalTransactionCreated) {
+                this.cbtTokenContract.events.CulturalTransactionCreated()
+                    .on('data', this.handleCulturalTransactionEvent.bind(this))
+                    .on('error', (error) => {
+                        console.error('❌ 文化交流交易事件监听错误:', error);
+                    });
+            }
             
             // 监听奖励分发事件
-            this.cbtTokenContract.events.RewardDistributed()
-                .on('data', this.handleRewardDistributedEvent.bind(this))
-                .on('error', console.error);
+            if (this.cbtTokenContract.events.RewardDistributed) {
+                this.cbtTokenContract.events.RewardDistributed()
+                    .on('data', this.handleRewardDistributedEvent.bind(this))
+                    .on('error', (error) => {
+                        console.error('❌ 奖励分发事件监听错误:', error);
+                    });
+            }
             
             console.log('✅ 区块链事件监听已启动');
         } catch (error) {

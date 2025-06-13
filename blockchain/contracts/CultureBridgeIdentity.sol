@@ -10,6 +10,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract CultureBridgeIdentity is Ownable {
     uint256 private _userIdCounter;
     
+    constructor(address initialOwner) Ownable(initialOwner) {
+        // 构造函数逻辑
+    }
+    
     struct User {
         uint256 id;
         string username;
