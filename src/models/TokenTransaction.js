@@ -1,94 +1,71 @@
 const mongoose = require('mongoose');
 
-const TokenTransactionSchema = new mongoose.Schema({
-  transactionHash: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  blockchainTransactionId: {
-    type: Number,
-    unique: true,
-    sparse: true
-  },
-  type: {
-    type: String,
-    enum: ['reward', 'transfer', 'purchase', 'refund', 'penalty'],
-    required: true
-  },
-  from: {
-    type: String, // 钱包地址
-    required: function() {
-      return this.type === 'transfer';
-    }
-  },
-  to: {
-    type: String, // 钱包地址
-    required: true
-  },
-  amount: {
-    type: Number,
-    required: true,
-    min: 0
-  },
-  purpose: {
-    type: String,
-    required: true
-  },
-  category: {
-    type: String,
-    enum: ['cultural_exchange', 'language_learning', 'content_creation', 'community_participation', 'premium_features', 'marketplace', 'general'],
-    default: 'general'
-  },
-  tags: [String],
-  // 关联的用户和内容
-  relatedUser: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'User'
-  },
-  relatedContent: {
-    contentType: {
-      type: String,
-      enum: ['post', 'comment', 'resource', 'event', 'chat_message', 'voice_translation']
+const tokenTransactionSchema = new mongoose.Schema({
+    transactionHash: {
+        type: String,
+        required: true,
+        unique: true
     },
-    contentId: mongoose.Schema.ObjectId
-  },
-  // 交易状态
-  status: {
-    type: String,
-    enum: ['pending', 'confirmed', 'failed', 'cancelled'],
-    default: 'pending'
-  },
-  confirmations: {
-    type: Number,
-    default: 0
-  },
-  gasUsed: Number,
-  gasFee: Number, // BNB
-  // 元数据
-  metadata: {
-    userAgent: String,
-    ipAddress: String,
-    location: {
-      country: String,
-      city: String
+    blockNumber: {
+        type: Number,
+        required: true
+    },
+    from: {
+        type: String,
+        required: true
+    },
+    to: {
+        type: String,
+        required: true
+    },
+    amount: {
+        type: String, // 使用字符串存储精确的数值
+        required: true
+    },
+    type: {
+        type: String,
+        enum: ['REWARD', 'TRANSFER', 'CULTURAL_EXCHANGE', 'MARKETPLACE'],
+        required: true
+    },
+    category: {
+        type: String,
+        enum: ['GENERAL', 'LEARNING_REWARD', 'CULTURAL_EXCHANGE', 'CONTENT_CREATION', 'COMMUNITY_CONTRIBUTION', 'MARKETPLACE_PURCHASE', 'GOVERNANCE_PARTICIPATION'],
+        default: 'GENERAL'
+    },
+    description: {
+        type: String,
+        default: ''
+    },
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    status: {
+        type: String,
+        enum: ['PENDING', 'CONFIRMED', 'FAILED'],
+        default: 'PENDING'
+    },
+    gasUsed: {
+        type: String
+    },
+    gasPrice: {
+        type: String
+    },
+    metadata: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
     }
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  confirmedAt: Date,
-  failedAt: Date
+}, {
+    timestamps: true
 });
 
 // 索引
-TokenTransactionSchema.index({ transactionHash: 1 });
-TokenTransactionSchema.index({ from: 1, createdAt: -1 });
-TokenTransactionSchema.index({ to: 1, createdAt: -1 });
-TokenTransactionSchema.index({ type: 1, status: 1 });
-TokenTransactionSchema.index({ category: 1, createdAt: -1 });
-TokenTransactionSchema.index({ relatedUser: 1, createdAt: -1 });
+tokenTransactionSchema.index({ transactionHash: 1 });
+tokenTransactionSchema.index({ userId: 1, createdAt: -1 });
+tokenTransactionSchema.index({ type: 1, createdAt: -1 });
+tokenTransactionSchema.index({ from: 1 });
+tokenTransactionSchema.index({ to: 1 });
+tokenTransactionSchema.index({ blockNumber: 1 });
 
-module.exports = mongoose.model('TokenTransaction', TokenTransactionSchema);
+module.exports = mongoose.model('TokenTransaction', tokenTransactionSchema);
 

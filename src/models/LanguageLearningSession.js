@@ -1,310 +1,218 @@
 const mongoose = require('mongoose');
 
-const LanguageLearningSessionSchema = new mongoose.Schema({
-  title: {
-    type: String,
-    required: [true, '请提供学习会话标题'],
-    trim: true,
-    maxlength: [100, '标题不能超过100个字符']
-  },
-  description: {
-    type: String,
-    required: [true, '请提供会话描述'],
-    maxlength: [1000, '描述不能超过1000个字符']
-  },
-  teacher: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  students: [{
-    user: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
+const languageLearningSessionSchema = new mongoose.Schema({
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
     },
-    enrolledAt: {
-      type: Date,
-      default: Date.now
+    sessionType: {
+        type: String,
+        enum: ['VOCABULARY', 'GRAMMAR', 'CONVERSATION', 'PRONUNCIATION', 'LISTENING', 'READING', 'WRITING', 'CULTURAL_CONTEXT'],
+        required: true
+    },
+    targetLanguage: {
+        type: String,
+        required: true,
+        enum: ['zh-CN', 'zh-TW', 'en-US', 'en-GB', 'ja-JP', 'ko-KR', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-BR', 'ru-RU', 'ar-XA', 'hi-IN', 'th-TH', 'vi-VN']
+    },
+    nativeLanguage: {
+        type: String,
+        required: true,
+        enum: ['zh-CN', 'zh-TW', 'en-US', 'en-GB', 'ja-JP', 'ko-KR', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-BR', 'ru-RU', 'ar-XA', 'hi-IN', 'th-TH', 'vi-VN']
+    },
+    level: {
+        type: String,
+        enum: ['BEGINNER', 'ELEMENTARY', 'INTERMEDIATE', 'UPPER_INTERMEDIATE', 'ADVANCED', 'PROFICIENT'],
+        required: true
+    },
+    content: {
+        title: {
+            type: String,
+            required: true
+        },
+        description: {
+            type: String
+        },
+        materials: [{
+            type: {
+                type: String,
+                enum: ['TEXT', 'AUDIO', 'VIDEO', 'IMAGE', 'INTERACTIVE']
+            },
+            content: String,
+            url: String,
+            metadata: mongoose.Schema.Types.Mixed
+        }],
+        exercises: [{
+            type: {
+                type: String,
+                enum: ['MULTIPLE_CHOICE', 'FILL_BLANK', 'TRANSLATION', 'PRONUNCIATION', 'LISTENING_COMPREHENSION', 'CONVERSATION']
+            },
+            question: String,
+            options: [String],
+            correctAnswer: String,
+            explanation: String,
+            points: {
+                type: Number,
+                default: 1
+            }
+        }]
     },
     progress: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 100
+        startTime: {
+            type: Date,
+            default: Date.now
+        },
+        endTime: {
+            type: Date
+        },
+        duration: {
+            type: Number // 秒
+        },
+        completedExercises: [{
+            exerciseIndex: Number,
+            userAnswer: String,
+            isCorrect: Boolean,
+            timeSpent: Number,
+            attempts: Number
+        }],
+        score: {
+            total: {
+                type: Number,
+                default: 0
+            },
+            correct: {
+                type: Number,
+                default: 0
+            },
+            percentage: {
+                type: Number,
+                default: 0
+            }
+        },
+        status: {
+            type: String,
+            enum: ['IN_PROGRESS', 'COMPLETED', 'ABANDONED'],
+            default: 'IN_PROGRESS'
+        }
     },
-    completedLessons: [String],
-    currentLevel: {
-      type: String,
-      enum: ['beginner', 'intermediate', 'advanced'],
-      default: 'beginner'
+    feedback: {
+        strengths: [String],
+        weaknesses: [String],
+        recommendations: [String],
+        nextLevelSuggestion: String
+    },
+    rewards: {
+        cbtEarned: {
+            type: String,
+            default: '0'
+        },
+        experiencePoints: {
+            type: Number,
+            default: 0
+        },
+        achievements: [String]
+    },
+    culturalContext: {
+        region: String,
+        customs: [String],
+        etiquette: [String],
+        commonPhrases: [{
+            phrase: String,
+            meaning: String,
+            usage: String
+        }]
     }
-  }],
-  targetLanguage: {
-    type: String,
-    required: [true, '请指定目标语言']
-  },
-  sourceLanguage: {
-    type: String,
-    required: [true, '请指定源语言']
-  },
-  level: {
-    type: String,
-    required: true,
-    enum: ['beginner', 'intermediate', 'advanced']
-  },
-  sessionType: {
-    type: String,
-    enum: ['one_on_one', 'group', 'self_study'],
-    default: 'group'
-  },
-  maxStudents: {
-    type: Number,
-    default: 10,
-    min: [1, '至少需要1个学生'],
-    max: [50, '最多50个学生']
-  },
-  schedule: {
-    startDate: {
-      type: Date,
-      required: true
-    },
-    endDate: {
-      type: Date,
-      required: true
-    },
-    sessions: [{
-      date: Date,
-      startTime: String,
-      endTime: String,
-      topic: String,
-      completed: {
-        type: Boolean,
-        default: false
-      }
-    }],
-    timezone: {
-      type: String,
-      default: 'UTC'
-    }
-  },
-  curriculum: [{
-    lesson: {
-      type: String,
-      required: true
-    },
-    objectives: [String],
-    materials: [{
-      type: {
-        type: String,
-        enum: ['text', 'audio', 'video', 'exercise', 'quiz']
-      },
-      title: String,
-      url: String,
-      description: String
-    }],
-    duration: {
-      type: Number, // 分钟
-      default: 60
-    },
-    order: {
-      type: Number,
-      required: true
-    }
-  }],
-  // CBT代币奖励系统
-  tokenRewards: {
-    teacherReward: {
-      type: Number,
-      default: 15
-    },
-    studentCompletionReward: {
-      type: Number,
-      default: 8
-    },
-    progressMilestoneReward: {
-      type: Number,
-      default: 5
-    },
-    perfectAttendanceBonus: {
-      type: Number,
-      default: 10
-    }
-  },
-  // 评价系统
-  ratings: [{
-    student: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    teachingQuality: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    materialQuality: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    engagement: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    overallRating: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    comment: {
-      type: String,
-      maxlength: [500, '评论不能超过500个字符']
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  averageRating: {
-    type: Number,
-    default: 0
-  },
-  // 学习成果跟踪
-  learningOutcomes: [{
-    student: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    preAssessment: {
-      score: Number,
-      date: Date
-    },
-    postAssessment: {
-      score: Number,
-      date: Date
-    },
-    skillsImproved: [String],
-    weakAreas: [String],
-    recommendations: String
-  }],
-  // 互动功能
-  discussions: [{
-    user: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    message: {
-      type: String,
-      required: true,
-      maxlength: [1000, '消息不能超过1000个字符']
-    },
-    replies: [{
-      user: {
-        type: mongoose.Schema.ObjectId,
-        ref: 'User'
-      },
-      message: String,
-      createdAt: {
-        type: Date,
-        default: Date.now
-      }
-    }],
-    createdAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  // 作业和练习
-  assignments: [{
-    title: String,
-    description: String,
-    dueDate: Date,
-    submissions: [{
-      student: {
-        type: mongoose.Schema.ObjectId,
-        ref: 'User'
-      },
-      content: String,
-      submittedAt: {
-        type: Date,
-        default: Date.now
-      },
-      grade: {
-        type: Number,
-        min: 0,
-        max: 100
-      },
-      feedback: String
-    }]
-  }],
-  status: {
-    type: String,
-    enum: ['draft', 'published', 'ongoing', 'completed', 'cancelled'],
-    default: 'draft'
-  },
-  isPublic: {
-    type: Boolean,
-    default: true
-  },
-  price: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
-  currency: {
-    type: String,
-    enum: ['CBT', 'USD', 'EUR', 'CNY'],
-    default: 'CBT'
-  },
-  tags: [String],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+}, {
+    timestamps: true
 });
 
-// 更新时间中间件
-LanguageLearningSessionSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
+// 索引
+languageLearningSessionSchema.index({ userId: 1, createdAt: -1 });
+languageLearningSessionSchema.index({ targetLanguage: 1, level: 1 });
+languageLearningSessionSchema.index({ sessionType: 1 });
+languageLearningSessionSchema.index({ 'progress.status': 1 });
+
+// 虚拟字段
+languageLearningSessionSchema.virtual('isCompleted').get(function() {
+    return this.progress.status === 'COMPLETED';
 });
 
-// 计算平均评分
-LanguageLearningSessionSchema.methods.calculateAverageRating = function() {
-  if (this.ratings.length === 0) {
-    this.averageRating = 0;
-  } else {
-    const sum = this.ratings.reduce((acc, rating) => acc + rating.overallRating, 0);
-    this.averageRating = Math.round((sum / this.ratings.length) * 10) / 10;
-  }
+languageLearningSessionSchema.virtual('accuracyRate').get(function() {
+    if (this.progress.completedExercises.length === 0) return 0;
+    const correct = this.progress.completedExercises.filter(ex => ex.isCorrect).length;
+    return (correct / this.progress.completedExercises.length) * 100;
+});
+
+// 实例方法
+languageLearningSessionSchema.methods.completeExercise = function(exerciseIndex, userAnswer, timeSpent) {
+    const exercise = this.content.exercises[exerciseIndex];
+    if (!exercise) return false;
+    
+    const isCorrect = userAnswer === exercise.correctAnswer;
+    
+    // 查找是否已经回答过这个练习
+    let completedExercise = this.progress.completedExercises.find(ex => ex.exerciseIndex === exerciseIndex);
+    
+    if (completedExercise) {
+        completedExercise.attempts += 1;
+        if (isCorrect && !completedExercise.isCorrect) {
+            completedExercise.isCorrect = true;
+            completedExercise.userAnswer = userAnswer;
+        }
+    } else {
+        this.progress.completedExercises.push({
+            exerciseIndex,
+            userAnswer,
+            isCorrect,
+            timeSpent,
+            attempts: 1
+        });
+    }
+    
+    // 更新分数
+    this.updateScore();
+    
+    return isCorrect;
 };
 
-// 检查用户是否已注册
-LanguageLearningSessionSchema.methods.isUserEnrolled = function(userId) {
-  return this.students.some(student => 
-    student.user.toString() === userId.toString()
-  );
+languageLearningSessionSchema.methods.updateScore = function() {
+    const totalExercises = this.content.exercises.length;
+    const correctAnswers = this.progress.completedExercises.filter(ex => ex.isCorrect).length;
+    
+    this.progress.score.total = totalExercises;
+    this.progress.score.correct = correctAnswers;
+    this.progress.score.percentage = totalExercises > 0 ? (correctAnswers / totalExercises) * 100 : 0;
 };
 
-// 获取可用名额
-LanguageLearningSessionSchema.methods.getAvailableSlots = function() {
-  return this.maxStudents - this.students.length;
+languageLearningSessionSchema.methods.completeSession = function() {
+    this.progress.endTime = new Date();
+    this.progress.duration = Math.floor((this.progress.endTime - this.progress.startTime) / 1000);
+    this.progress.status = 'COMPLETED';
+    
+    // 计算奖励
+    this.calculateRewards();
 };
 
-// 计算学生进度
-LanguageLearningSessionSchema.methods.calculateStudentProgress = function(userId) {
-  const student = this.students.find(s => s.user.toString() === userId.toString());
-  if (!student) return 0;
-  
-  const totalLessons = this.curriculum.length;
-  const completedLessons = student.completedLessons.length;
-  
-  return totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+languageLearningSessionSchema.methods.calculateRewards = function() {
+    const baseReward = 2; // 基础CBT奖励
+    const bonusMultiplier = this.progress.score.percentage / 100;
+    const timeBonus = this.progress.duration < 300 ? 0.5 : 0; // 5分钟内完成额外奖励
+    
+    const totalReward = baseReward * (1 + bonusMultiplier) + timeBonus;
+    this.rewards.cbtEarned = totalReward.toFixed(2);
+    
+    // 经验值计算
+    this.rewards.experiencePoints = Math.floor(this.progress.score.percentage * 10);
+    
+    // 成就检查
+    if (this.progress.score.percentage === 100) {
+        this.rewards.achievements.push('PERFECT_SCORE');
+    }
+    if (this.progress.duration < 300) {
+        this.rewards.achievements.push('SPEED_LEARNER');
+    }
 };
 
-module.exports = mongoose.model('LanguageLearningSession', LanguageLearningSessionSchema);
+module.exports = mongoose.model('LanguageLearningSession', languageLearningSessionSchema);
 

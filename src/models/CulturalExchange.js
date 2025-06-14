@@ -1,198 +1,365 @@
 const mongoose = require('mongoose');
 
-const CulturalExchangeSchema = new mongoose.Schema({
-  title: {
-    type: String,
-    required: [true, '请提供交流活动标题'],
-    trim: true,
-    maxlength: [100, '标题不能超过100个字符']
-  },
-  description: {
-    type: String,
-    required: [true, '请提供活动描述'],
-    maxlength: [1000, '描述不能超过1000个字符']
-  },
-  organizer: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  participants: [{
-    user: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    joinedAt: {
-      type: Date,
-      default: Date.now
-    },
-    contribution: {
-      type: String,
-      maxlength: [500, '贡献描述不能超过500个字符']
-    }
-  }],
-  category: {
-    type: String,
-    required: true,
-    enum: ['language_exchange', 'cultural_sharing', 'cooking', 'music', 'art', 'literature', 'history', 'traditions', 'festivals', 'other']
-  },
-  languages: [{
-    type: String,
-    required: true
-  }],
-  maxParticipants: {
-    type: Number,
-    default: 20,
-    min: [2, '至少需要2个参与者'],
-    max: [100, '最多100个参与者']
-  },
-  startTime: {
-    type: Date,
-    required: [true, '请提供开始时间']
-  },
-  endTime: {
-    type: Date,
-    required: [true, '请提供结束时间']
-  },
-  timezone: {
-    type: String,
-    default: 'UTC'
-  },
-  location: {
-    type: {
-      type: String,
-      enum: ['online', 'offline', 'hybrid'],
-      default: 'online'
-    },
-    address: String,
-    coordinates: {
-      latitude: Number,
-      longitude: Number
-    },
-    platform: String // 在线平台名称
-  },
-  status: {
-    type: String,
-    enum: ['upcoming', 'ongoing', 'completed', 'cancelled'],
-    default: 'upcoming'
-  },
-  // CBT代币奖励设置
-  tokenRewards: {
-    organizerReward: {
-      type: Number,
-      default: 10
-    },
-    participantReward: {
-      type: Number,
-      default: 5
-    },
-    completionBonus: {
-      type: Number,
-      default: 3
-    }
-  },
-  // 评价和反馈
-  ratings: [{
-    user: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    rating: {
-      type: Number,
-      min: 1,
-      max: 5
-    },
-    comment: {
-      type: String,
-      maxlength: [500, '评论不能超过500个字符']
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  averageRating: {
-    type: Number,
-    default: 0
-  },
-  // 学习成果
-  learningOutcomes: [{
-    participant: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    },
-    skillsLearned: [String],
-    culturalInsights: String,
-    languageProgress: {
-      before: {
+const culturalExchangeSchema = new mongoose.Schema({
+    title: {
         type: String,
-        enum: ['beginner', 'intermediate', 'advanced']
-      },
-      after: {
+        required: true,
+        trim: true,
+        maxlength: 200
+    },
+    description: {
         type: String,
-        enum: ['beginner', 'intermediate', 'advanced']
-      }
-    }
-  }],
-  // 媒体资源
-  media: [{
+        required: true,
+        maxlength: 2000
+    },
+    creator: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
     type: {
-      type: String,
-      enum: ['image', 'video', 'audio', 'document']
+        type: String,
+        enum: ['CULTURAL_SHARING', 'LANGUAGE_EXCHANGE', 'TRADITION_DISCUSSION', 'FOOD_CULTURE', 'FESTIVAL_CELEBRATION', 'TRAVEL_EXPERIENCE', 'BUSINESS_CULTURE', 'EDUCATIONAL_EXCHANGE'],
+        required: true
     },
-    url: String,
-    caption: String,
-    uploadedBy: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
+    category: {
+        type: String,
+        enum: ['DISCUSSION', 'Q_AND_A', 'STORYTELLING', 'TUTORIAL', 'DEBATE', 'COLLABORATION'],
+        required: true
     },
-    uploadedAt: {
-      type: Date,
-      default: Date.now
+    targetLanguages: [{
+        type: String,
+        enum: ['zh-CN', 'zh-TW', 'en-US', 'en-GB', 'ja-JP', 'ko-KR', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-BR', 'ru-RU', 'ar-XA', 'hi-IN', 'th-TH', 'vi-VN']
+    }],
+    culturalRegions: [{
+        type: String,
+        enum: ['EAST_ASIA', 'SOUTHEAST_ASIA', 'SOUTH_ASIA', 'MIDDLE_EAST', 'EUROPE', 'NORTH_AMERICA', 'SOUTH_AMERICA', 'AFRICA', 'OCEANIA']
+    }],
+    content: {
+        text: String,
+        images: [{
+            url: String,
+            caption: String,
+            description: String
+        }],
+        videos: [{
+            url: String,
+            title: String,
+            description: String,
+            duration: Number
+        }],
+        audio: [{
+            url: String,
+            title: String,
+            description: String,
+            duration: Number
+        }],
+        attachments: [{
+            url: String,
+            filename: String,
+            fileType: String,
+            size: Number
+        }]
+    },
+    participants: [{
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        joinedAt: {
+            type: Date,
+            default: Date.now
+        },
+        role: {
+            type: String,
+            enum: ['PARTICIPANT', 'MODERATOR', 'EXPERT'],
+            default: 'PARTICIPANT'
+        },
+        contributionScore: {
+            type: Number,
+            default: 0
+        },
+        lastActivity: {
+            type: Date,
+            default: Date.now
+        }
+    }],
+    interactions: {
+        views: {
+            type: Number,
+            default: 0
+        },
+        likes: [{
+            user: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            createdAt: {
+                type: Date,
+                default: Date.now
+            }
+        }],
+        comments: [{
+            user: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            content: {
+                type: String,
+                required: true,
+                maxlength: 1000
+            },
+            language: String,
+            translation: {
+                originalText: String,
+                translatedText: String,
+                targetLanguage: String
+            },
+            replies: [{
+                user: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: 'User'
+                },
+                content: String,
+                createdAt: {
+                    type: Date,
+                    default: Date.now
+                }
+            }],
+            likes: [{
+                user: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: 'User'
+                },
+                createdAt: {
+                    type: Date,
+                    default: Date.now
+                }
+            }],
+            createdAt: {
+                type: Date,
+                default: Date.now
+            }
+        }],
+        shares: [{
+            user: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            platform: String,
+            createdAt: {
+                type: Date,
+                default: Date.now
+            }
+        }]
+    },
+    rewards: {
+        cbtPool: {
+            type: String,
+            default: '0'
+        },
+        distributedRewards: {
+            type: String,
+            default: '0'
+        },
+        rewardCriteria: {
+            participationReward: {
+                type: String,
+                default: '1'
+            },
+            qualityContributionReward: {
+                type: String,
+                default: '3'
+            },
+            expertAnswerReward: {
+                type: String,
+                default: '5'
+            }
+        }
+    },
+    status: {
+        type: String,
+        enum: ['DRAFT', 'ACTIVE', 'FEATURED', 'ARCHIVED', 'CLOSED'],
+        default: 'ACTIVE'
+    },
+    moderation: {
+        isModerated: {
+            type: Boolean,
+            default: false
+        },
+        moderatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        moderationNotes: String,
+        reportCount: {
+            type: Number,
+            default: 0
+        },
+        reports: [{
+            reporter: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            reason: String,
+            description: String,
+            createdAt: {
+                type: Date,
+                default: Date.now
+            }
+        }]
+    },
+    schedule: {
+        startTime: Date,
+        endTime: Date,
+        timezone: String,
+        isRecurring: {
+            type: Boolean,
+            default: false
+        },
+        recurrencePattern: String
+    },
+    tags: [String],
+    difficulty: {
+        type: String,
+        enum: ['BEGINNER', 'INTERMEDIATE', 'ADVANCED'],
+        default: 'BEGINNER'
     }
-  }],
-  tags: [String],
-  isPublic: {
-    type: Boolean,
-    default: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+}, {
+    timestamps: true
 });
 
-// 更新时间中间件
-CulturalExchangeSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
+// 索引
+culturalExchangeSchema.index({ creator: 1, createdAt: -1 });
+culturalExchangeSchema.index({ type: 1, status: 1 });
+culturalExchangeSchema.index({ targetLanguages: 1 });
+culturalExchangeSchema.index({ culturalRegions: 1 });
+culturalExchangeSchema.index({ tags: 1 });
+culturalExchangeSchema.index({ 'interactions.views': -1 });
+culturalExchangeSchema.index({ createdAt: -1 });
+
+// 文本搜索索引
+culturalExchangeSchema.index({
+    title: 'text',
+    description: 'text',
+    tags: 'text'
 });
 
-// 计算平均评分
-CulturalExchangeSchema.methods.calculateAverageRating = function() {
-  if (this.ratings.length === 0) {
-    this.averageRating = 0;
-  } else {
-    const sum = this.ratings.reduce((acc, rating) => acc + rating.rating, 0);
-    this.averageRating = Math.round((sum / this.ratings.length) * 10) / 10;
-  }
+// 虚拟字段
+culturalExchangeSchema.virtual('likesCount').get(function() {
+    return this.interactions.likes.length;
+});
+
+culturalExchangeSchema.virtual('commentsCount').get(function() {
+    return this.interactions.comments.length;
+});
+
+culturalExchangeSchema.virtual('participantsCount').get(function() {
+    return this.participants.length;
+});
+
+culturalExchangeSchema.virtual('engagementScore').get(function() {
+    const views = this.interactions.views || 0;
+    const likes = this.interactions.likes.length || 0;
+    const comments = this.interactions.comments.length || 0;
+    const participants = this.participants.length || 0;
+    
+    return (likes * 2) + (comments * 3) + (participants * 5) + (views * 0.1);
+});
+
+// 实例方法
+culturalExchangeSchema.methods.addParticipant = function(userId, role = 'PARTICIPANT') {
+    const existingParticipant = this.participants.find(p => p.user.toString() === userId.toString());
+    
+    if (!existingParticipant) {
+        this.participants.push({
+            user: userId,
+            role: role,
+            joinedAt: new Date(),
+            lastActivity: new Date()
+        });
+        return true;
+    }
+    return false;
 };
 
-// 检查用户是否已参与
-CulturalExchangeSchema.methods.isUserParticipant = function(userId) {
-  return this.participants.some(participant => 
-    participant.user.toString() === userId.toString()
-  );
+culturalExchangeSchema.methods.removeParticipant = function(userId) {
+    const index = this.participants.findIndex(p => p.user.toString() === userId.toString());
+    if (index > -1) {
+        this.participants.splice(index, 1);
+        return true;
+    }
+    return false;
 };
 
-// 获取可用名额
-CulturalExchangeSchema.methods.getAvailableSlots = function() {
-  return this.maxParticipants - this.participants.length;
+culturalExchangeSchema.methods.addLike = function(userId) {
+    const existingLike = this.interactions.likes.find(l => l.user.toString() === userId.toString());
+    
+    if (!existingLike) {
+        this.interactions.likes.push({
+            user: userId,
+            createdAt: new Date()
+        });
+        return true;
+    }
+    return false;
 };
 
-module.exports = mongoose.model('CulturalExchange', CulturalExchangeSchema);
+culturalExchangeSchema.methods.removeLike = function(userId) {
+    const index = this.interactions.likes.findIndex(l => l.user.toString() === userId.toString());
+    if (index > -1) {
+        this.interactions.likes.splice(index, 1);
+        return true;
+    }
+    return false;
+};
+
+culturalExchangeSchema.methods.addComment = function(userId, content, language = null) {
+    const comment = {
+        user: userId,
+        content: content,
+        language: language,
+        createdAt: new Date(),
+        replies: [],
+        likes: []
+    };
+    
+    this.interactions.comments.push(comment);
+    return comment;
+};
+
+culturalExchangeSchema.methods.incrementViews = function() {
+    this.interactions.views += 1;
+};
+
+culturalExchangeSchema.methods.updateParticipantActivity = function(userId) {
+    const participant = this.participants.find(p => p.user.toString() === userId.toString());
+    if (participant) {
+        participant.lastActivity = new Date();
+        return true;
+    }
+    return false;
+};
+
+culturalExchangeSchema.methods.calculateRewardDistribution = function() {
+    const totalPool = parseFloat(this.rewards.cbtPool || '0');
+    const activeParticipants = this.participants.filter(p => {
+        const daysSinceLastActivity = (Date.now() - p.lastActivity) / (1000 * 60 * 60 * 24);
+        return daysSinceLastActivity <= 7; // 活跃参与者：7天内有活动
+    });
+    
+    if (activeParticipants.length === 0 || totalPool === 0) {
+        return [];
+    }
+    
+    const rewardPerParticipant = totalPool / activeParticipants.length;
+    
+    return activeParticipants.map(participant => ({
+        userId: participant.user,
+        amount: rewardPerParticipant.toFixed(2),
+        reason: 'Cultural exchange participation'
+    }));
+};
+
+module.exports = mongoose.model('CulturalExchange', culturalExchangeSchema);
 
