@@ -6,7 +6,7 @@ const path = require('path');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/error');
 const advancedResults = require('./middleware/advancedResults');
-const { securityMiddleware } = require('./middleware/security');
+const securityMiddleware = require('./middleware/security');
 
 // 加载环境变量
 dotenv.config();

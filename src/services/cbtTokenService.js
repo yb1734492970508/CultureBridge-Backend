@@ -1,5 +1,5 @@
 const OptimizedBlockchainService = require('./optimizedBlockchainService');
-const BlockchainEventListener = require('./blockchainEventListener');
+const { BlockchainEventListener } = require('./blockchainEventListener');
 const User = require('../models/User');
 
 class CBTTokenService {
