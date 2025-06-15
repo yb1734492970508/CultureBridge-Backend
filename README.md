@@ -178,7 +178,7 @@ const securityConfig = {
         max: 100 // 每IP最多100请求
     },
     cors: {
-        origin: ['https://culturebridge.com'],
+        origin: ['https://culturebridgechain.com'],
         credentials: true
     }
 };
@@ -310,9 +310,10 @@ chore: 构建过程或辅助工具的变动
 
 ## 📞 联系我们
 
-- 项目主页: https://github.com/yb1734492970508/CultureBridge-Backend
+- 项目主页: https://culturebridgechain.com
+- GitHub: https://github.com/yb1734492970508/CultureBridge-Backend
 - 问题反馈: https://github.com/yb1734492970508/CultureBridge-Backend/issues
-- 邮箱: support@culturebridge.com
+- 邮箱: support@culturebridgechain.com
 
 ## 🙏 致谢
 

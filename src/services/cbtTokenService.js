@@ -8,25 +8,44 @@ class CBTTokenService {
         this.blockchainService = new OptimizedBlockchainService();
         this.eventListener = new BlockchainEventListener(this.blockchainService);
         
-        // 奖励配置
+        // 奖励配置 (基于$0.05价格)
         this.rewardConfig = {
-            REGISTRATION: { amount: '10', category: 'GENERAL', description: '注册奖励' },
+            REGISTRATION: { amount: '20', category: 'GENERAL', description: '注册奖励' },
             DAILY_LOGIN: { amount: '1', category: 'GENERAL', description: '每日登录奖励' },
-            POST_CONTENT: { amount: '2', category: 'CONTENT_CREATION', description: '发布内容奖励' },
-            VOICE_TRANSLATION: { amount: '2', category: 'LEARNING_REWARD', description: '语音翻译奖励' },
-            CHAT_PARTICIPATION: { amount: '0.5', category: 'COMMUNITY_CONTRIBUTION', description: '聊天参与奖励' },
-            CULTURAL_EXCHANGE: { amount: '3', category: 'CULTURAL_EXCHANGE', description: '文化交流奖励' },
-            LANGUAGE_LEARNING: { amount: '2', category: 'LEARNING_REWARD', description: '语言学习奖励' }
+            WEEKLY_LOGIN: { amount: '15', category: 'GENERAL', description: '连续7天登录奖励' },
+            MONTHLY_LOGIN: { amount: '70', category: 'GENERAL', description: '连续30天登录奖励' },
+            POST_CONTENT: { amount: '5', category: 'CONTENT_CREATION', description: '发布内容奖励' },
+            VOICE_TRANSLATION: { amount: '0.5', category: 'LEARNING_REWARD', description: '语音翻译奖励' },
+            CHAT_MESSAGE: { amount: '0.1', category: 'COMMUNITY_CONTRIBUTION', description: '发送消息奖励' },
+            VOICE_CALL_MINUTE: { amount: '0.5', category: 'COMMUNITY_CONTRIBUTION', description: '语音通话奖励(每分钟)' },
+            VIDEO_CALL_MINUTE: { amount: '1', category: 'COMMUNITY_CONTRIBUTION', description: '视频通话奖励(每分钟)' },
+            CULTURAL_EXCHANGE: { amount: '10', category: 'CULTURAL_EXCHANGE', description: '文化交流奖励' },
+            LANGUAGE_LEARNING: { amount: '3', category: 'LEARNING_REWARD', description: '语言学习奖励' },
+            COURSE_COMPLETION: { amount: '15', category: 'LEARNING_REWARD', description: '完成课程奖励' },
+            TEST_PASS: { amount: '25', category: 'LEARNING_REWARD', description: '通过测试奖励' },
+            REFERRAL: { amount: '20', category: 'REFERRAL', description: '推荐新用户奖励' },
+            REFERRAL_BONUS: { amount: '10', category: 'REFERRAL', description: '被推荐用户完成学习奖励' },
+            LIKE_RECEIVED: { amount: '0.2', category: 'COMMUNITY_CONTRIBUTION', description: '获得点赞奖励' },
+            COMMENT_RECEIVED: { amount: '0.3', category: 'COMMUNITY_CONTRIBUTION', description: '收到评论奖励' }
         };
         
-        // 每日限制
+        // 每日限制 (基于新的奖励机制)
         this.dailyLimits = {
             DAILY_LOGIN: 1,
+            WEEKLY_LOGIN: 1,
+            MONTHLY_LOGIN: 1,
             POST_CONTENT: 5,
-            VOICE_TRANSLATION: 10,
-            CHAT_PARTICIPATION: 20,
+            VOICE_TRANSLATION: 100,
+            CHAT_MESSAGE: 500,
+            VOICE_CALL_MINUTE: 120,
+            VIDEO_CALL_MINUTE: 60,
             CULTURAL_EXCHANGE: 3,
-            LANGUAGE_LEARNING: 5
+            LANGUAGE_LEARNING: 10,
+            COURSE_COMPLETION: 3,
+            TEST_PASS: 2,
+            LIKE_RECEIVED: 50,
+            COMMENT_RECEIVED: 30,
+            TOTAL_DAILY_REWARD: 50 // 每日总奖励上限
         };
         
         // 用户每日奖励记录缓存
