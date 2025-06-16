@@ -1,333 +1,291 @@
-const socketIo = require('socket.io');
-const jwt = require('jsonwebtoken');
-
 class ChatService {
-  constructor(server) {
-    this.io = socketIo(server, {
-      cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true
-      }
-    });
-    
-    this.connectedUsers = new Map();
-    this.chatRooms = new Map();
-    this.messageHistory = new Map();
-    
-    this.initializeRooms();
-    this.setupSocketHandlers();
-  }
-
-  initializeRooms() {
-    const defaultRooms = [
-      { id: 'general', name: '综合讨论', description: '自由交流各种话题' },
-      { id: 'language-exchange', name: '语言交换', description: '练习语言，互相学习' },
-      { id: 'culture-share', name: '文化分享', description: '分享各国文化特色' },
-      { id: 'tech-talk', name: '科技讨论', description: '讨论最新科技趋势' },
-      { id: 'travel-stories', name: '旅行故事', description: '分享旅行经历和见闻' }
-    ];
-
-    defaultRooms.forEach(room => {
-      this.chatRooms.set(room.id, {
-        ...room,
-        users: new Set(),
-        messages: []
-      });
-      this.messageHistory.set(room.id, []);
-    });
-  }
-
-  setupSocketHandlers() {
-    this.io.on('connection', (socket) => {
-      console.log(`用户连接: ${socket.id}`);
-
-      // 用户认证
-      socket.on('authenticate', (token) => {
-        try {
-          if (token) {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            socket.userId = decoded.id;
-            socket.username = decoded.username || '用户';
-          } else {
-            socket.userId = socket.id;
-            socket.username = '匿名用户';
-          }
-          
-          this.connectedUsers.set(socket.id, {
-            userId: socket.userId,
-            username: socket.username,
-            socketId: socket.id,
-            currentRoom: null,
-            language: 'zh',
-            joinedAt: new Date()
-          });
-
-          socket.emit('authenticated', {
-            userId: socket.userId,
-            username: socket.username
-          });
-
-        } catch (error) {
-          console.error('认证失败:', error);
-          socket.userId = socket.id;
-          socket.username = '匿名用户';
-        }
-      });
-
-      // 加入聊天室
-      socket.on('joinRoom', (roomId) => {
-        const user = this.connectedUsers.get(socket.id);
-        if (!user) return;
-
-        // 离开之前的房间
-        if (user.currentRoom) {
-          socket.leave(user.currentRoom);
-          const prevRoom = this.chatRooms.get(user.currentRoom);
-          if (prevRoom) {
-            prevRoom.users.delete(socket.id);
-            socket.to(user.currentRoom).emit('userLeft', {
-              userId: user.userId,
-              username: user.username
-            });
-          }
-        }
-
-        // 加入新房间
-        socket.join(roomId);
-        user.currentRoom = roomId;
+    constructor() {
+        this.rooms = new Map();
+        this.messages = new Map();
+        this.userRooms = new Map();
         
-        const room = this.chatRooms.get(roomId);
+        // 初始化默认聊天室
+        this.initializeDefaultRooms();
+    }
+    
+    /**
+     * 初始化默认聊天室
+     */
+    initializeDefaultRooms() {
+        const defaultRooms = [
+            {
+                id: 'general',
+                name: '综合讨论',
+                description: '自由交流各种话题',
+                languages: ['zh', 'en'],
+                maxUsers: 100,
+                isPublic: true
+            },
+            {
+                id: 'chinese-english',
+                name: '中英交流',
+                description: '中文和英文学习交流',
+                languages: ['zh', 'en'],
+                maxUsers: 50,
+                isPublic: true
+            },
+            {
+                id: 'culture-exchange',
+                name: '文化交流',
+                description: '分享不同文化背景和习俗',
+                languages: ['zh', 'en', 'es', 'fr'],
+                maxUsers: 80,
+                isPublic: true
+            },
+            {
+                id: 'language-learning',
+                name: '语言学习',
+                description: '多语言学习互助',
+                languages: ['zh', 'en', 'es', 'fr', 'de', 'ja', 'ko'],
+                maxUsers: 60,
+                isPublic: true
+            }
+        ];
+        
+        defaultRooms.forEach(room => {
+            this.rooms.set(room.id, {
+                ...room,
+                users: new Set(),
+                createdAt: new Date(),
+                messageCount: 0
+            });
+            this.messages.set(room.id, []);
+        });
+    }
+    
+    /**
+     * 获取聊天室列表
+     */
+    async getChatRooms() {
+        const roomList = [];
+        
+        for (const [id, room] of this.rooms) {
+            if (room.isPublic) {
+                roomList.push({
+                    id,
+                    name: room.name,
+                    description: room.description,
+                    languages: room.languages,
+                    userCount: room.users.size,
+                    maxUsers: room.maxUsers,
+                    messageCount: room.messageCount,
+                    createdAt: room.createdAt
+                });
+            }
+        }
+        
+        return roomList;
+    }
+    
+    /**
+     * 加入聊天室
+     */
+    async joinRoom(roomId, userId) {
+        const room = this.rooms.get(roomId);
+        if (!room) {
+            throw new Error('聊天室不存在');
+        }
+        
+        if (room.users.size >= room.maxUsers) {
+            throw new Error('聊天室已满');
+        }
+        
+        room.users.add(userId);
+        
+        // 记录用户所在房间
+        const userRoomList = this.userRooms.get(userId) || new Set();
+        userRoomList.add(roomId);
+        this.userRooms.set(userId, userRoomList);
+        
+        return true;
+    }
+    
+    /**
+     * 离开聊天室
+     */
+    async leaveRoom(roomId, userId) {
+        const room = this.rooms.get(roomId);
         if (room) {
-          room.users.add(socket.id);
-          
-          // 发送历史消息
-          const history = this.messageHistory.get(roomId) || [];
-          socket.emit('messageHistory', history.slice(-50)); // 最近50条消息
-
-          // 通知其他用户
-          socket.to(roomId).emit('userJoined', {
-            userId: user.userId,
-            username: user.username
-          });
-
-          // 发送在线用户列表
-          const onlineUsers = Array.from(room.users).map(socketId => {
-            const userData = this.connectedUsers.get(socketId);
-            return userData ? {
-              userId: userData.userId,
-              username: userData.username
-            } : null;
-          }).filter(Boolean);
-
-          this.io.to(roomId).emit('onlineUsers', onlineUsers);
+            room.users.delete(userId);
         }
-      });
-
-      // 发送消息
-      socket.on('sendMessage', async (messageData) => {
-        const user = this.connectedUsers.get(socket.id);
-        if (!user || !user.currentRoom) return;
-
-        const message = {
-          id: Date.now() + Math.random(),
-          userId: user.userId,
-          username: user.username,
-          content: messageData.content,
-          room: messageData.room || user.currentRoom,
-          language: messageData.language || 'zh',
-          timestamp: new Date(),
-          type: messageData.type || 'text'
+        
+        const userRoomList = this.userRooms.get(userId);
+        if (userRoomList) {
+            userRoomList.delete(roomId);
+        }
+    }
+    
+    /**
+     * 保存消息
+     */
+    async saveMessage(messageData) {
+        const { roomId, userId, message, language } = messageData;
+        
+        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const savedMessage = {
+            id: messageId,
+            roomId,
+            userId,
+            message,
+            language,
+            timestamp: new Date(),
+            type: 'text'
         };
-
-        // 保存消息到历史记录
-        const history = this.messageHistory.get(message.room) || [];
-        history.push(message);
-        if (history.length > 1000) {
-          history.splice(0, history.length - 1000); // 保持最近1000条消息
+        
+        // 保存到房间消息列表
+        const roomMessages = this.messages.get(roomId) || [];
+        roomMessages.push(savedMessage);
+        this.messages.set(roomId, roomMessages);
+        
+        // 更新房间消息计数
+        const room = this.rooms.get(roomId);
+        if (room) {
+            room.messageCount++;
         }
-        this.messageHistory.set(message.room, history);
-
-        // 广播消息到房间内所有用户
-        this.io.to(message.room).emit('message', message);
-
-        // 如果是语音消息，处理语音数据
-        if (message.type === 'voice') {
-          this.handleVoiceMessage(message);
+        
+        return savedMessage;
+    }
+    
+    /**
+     * 保存语音消息
+     */
+    async saveVoiceMessage(messageData) {
+        const { roomId, userId, audioData, transcription, language } = messageData;
+        
+        const messageId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const savedMessage = {
+            id: messageId,
+            roomId,
+            userId,
+            audioData,
+            transcription,
+            language,
+            timestamp: new Date(),
+            type: 'voice'
+        };
+        
+        // 保存到房间消息列表
+        const roomMessages = this.messages.get(roomId) || [];
+        roomMessages.push(savedMessage);
+        this.messages.set(roomId, roomMessages);
+        
+        // 更新房间消息计数
+        const room = this.rooms.get(roomId);
+        if (room) {
+            room.messageCount++;
         }
-      });
-
-      // 请求翻译
-      socket.on('requestTranslation', async (data) => {
-        const { messageId, targetLanguage } = data;
-        const user = this.connectedUsers.get(socket.id);
-        if (!user || !user.currentRoom) return;
-
-        try {
-          // 查找消息
-          const history = this.messageHistory.get(user.currentRoom) || [];
-          const message = history.find(msg => msg.id === messageId);
-          
-          if (message) {
-            const translation = await this.translateMessage(message.content, message.language, targetLanguage);
+        
+        return savedMessage;
+    }
+    
+    /**
+     * 获取聊天历史
+     */
+    async getChatHistory(roomId, page = 1, limit = 50) {
+        const roomMessages = this.messages.get(roomId) || [];
+        const startIndex = Math.max(0, roomMessages.length - page * limit);
+        const endIndex = roomMessages.length - (page - 1) * limit;
+        
+        return roomMessages
+            .slice(startIndex, endIndex)
+            .reverse(); // 最新消息在前
+    }
+    
+    /**
+     * 获取房间用户列表
+     */
+    async getRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        return room ? Array.from(room.users) : [];
+    }
+    
+    /**
+     * 获取用户所在房间
+     */
+    async getUserRooms(userId) {
+        const userRoomList = this.userRooms.get(userId) || new Set();
+        return Array.from(userRoomList);
+    }
+    
+    /**
+     * 创建私人聊天室
+     */
+    async createPrivateRoom(creatorId, participants, roomName) {
+        const roomId = `private_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        const room = {
+            id: roomId,
+            name: roomName || '私人聊天',
+            description: '私人聊天室',
+            languages: ['zh', 'en'],
+            maxUsers: participants.length + 1,
+            isPublic: false,
+            creatorId,
+            users: new Set([creatorId, ...participants]),
+            createdAt: new Date(),
+            messageCount: 0
+        };
+        
+        this.rooms.set(roomId, room);
+        this.messages.set(roomId, []);
+        
+        // 更新所有参与者的房间列表
+        [creatorId, ...participants].forEach(userId => {
+            const userRoomList = this.userRooms.get(userId) || new Set();
+            userRoomList.add(roomId);
+            this.userRooms.set(userId, userRoomList);
+        });
+        
+        return room;
+    }
+    
+    /**
+     * 删除消息
+     */
+    async deleteMessage(messageId, userId) {
+        for (const [roomId, messages] of this.messages) {
+            const messageIndex = messages.findIndex(msg => 
+                msg.id === messageId && msg.userId === userId
+            );
             
-            socket.emit('translatedMessage', {
-              messageId: messageId,
-              translation: translation,
-              targetLanguage: targetLanguage
-            });
-          }
-        } catch (error) {
-          console.error('翻译请求失败:', error);
-          socket.emit('translationError', {
-            messageId: messageId,
-            error: '翻译失败，请重试'
-          });
-        }
-      });
-
-      // 设置用户语言
-      socket.on('setLanguage', (language) => {
-        const user = this.connectedUsers.get(socket.id);
-        if (user) {
-          user.language = language;
-        }
-      });
-
-      // 获取房间列表
-      socket.on('getRooms', () => {
-        const rooms = Array.from(this.chatRooms.values()).map(room => ({
-          id: room.id,
-          name: room.name,
-          description: room.description,
-          userCount: room.users.size
-        }));
-        
-        socket.emit('roomList', rooms);
-      });
-
-      // 用户断开连接
-      socket.on('disconnect', () => {
-        console.log(`用户断开连接: ${socket.id}`);
-        
-        const user = this.connectedUsers.get(socket.id);
-        if (user && user.currentRoom) {
-          const room = this.chatRooms.get(user.currentRoom);
-          if (room) {
-            room.users.delete(socket.id);
-            socket.to(user.currentRoom).emit('userLeft', {
-              userId: user.userId,
-              username: user.username
-            });
-
-            // 更新在线用户列表
-            const onlineUsers = Array.from(room.users).map(socketId => {
-              const userData = this.connectedUsers.get(socketId);
-              return userData ? {
-                userId: userData.userId,
-                username: userData.username
-              } : null;
-            }).filter(Boolean);
-
-            this.io.to(user.currentRoom).emit('onlineUsers', onlineUsers);
-          }
+            if (messageIndex !== -1) {
+                messages.splice(messageIndex, 1);
+                return true;
+            }
         }
         
-        this.connectedUsers.delete(socket.id);
-      });
-    });
-  }
-
-  async translateMessage(text, sourceLanguage, targetLanguage) {
-    // 模拟翻译API调用
-    const mockTranslations = {
-      'zh-en': {
-        '大家好！欢迎来到CultureBridge文化交流平台！': 'Hello everyone! Welcome to CultureBridge cultural exchange platform!',
-        '这是一个很棒的应用！': 'This is an awesome application!',
-        '我来自中国，很高兴认识大家': 'I am from China, nice to meet everyone',
-        '今天天气真不错': 'The weather is really nice today'
-      },
-      'en-zh': {
-        'Hello everyone! Welcome to CultureBridge cultural exchange platform!': '大家好！欢迎来到CultureBridge文化交流平台！',
-        'This is an awesome application!': '这是一个很棒的应用！',
-        'I am from the United States': '我来自美国',
-        'Nice to meet you all': '很高兴认识大家'
-      },
-      'zh-es': {
-        '大家好！欢迎来到CultureBridge文化交流平台！': '¡Hola a todos! ¡Bienvenidos a la plataforma de intercambio cultural CultureBridge!',
-        '这是一个很棒的应用！': '¡Esta es una aplicación increíble!',
-        '我来自中国': 'Soy de China'
-      },
-      'en-es': {
-        'Hello everyone! Welcome to CultureBridge cultural exchange platform!': '¡Hola a todos! ¡Bienvenidos a la plataforma de intercambio cultural CultureBridge!',
-        'This is an awesome application!': '¡Esta es una aplicación increíble!'
-      }
-    };
-
-    const translationKey = `${sourceLanguage}-${targetLanguage}`;
-    const translation = mockTranslations[translationKey]?.[text];
+        return false;
+    }
     
-    if (translation) {
-      return translation;
+    /**
+     * 获取房间统计
+     */
+    async getRoomStats(roomId) {
+        const room = this.rooms.get(roomId);
+        const messages = this.messages.get(roomId) || [];
+        
+        if (!room) {
+            throw new Error('聊天室不存在');
+        }
+        
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayMessages = messages.filter(msg => new Date(msg.timestamp) >= today);
+        
+        return {
+            totalMessages: messages.length,
+            todayMessages: todayMessages.length,
+            activeUsers: room.users.size,
+            maxUsers: room.maxUsers,
+            createdAt: room.createdAt,
+            languages: room.languages
+        };
     }
-
-    // 如果没有预设翻译，返回带标记的原文
-    return `[${targetLanguage.toUpperCase()}] ${text}`;
-  }
-
-  async handleVoiceMessage(message) {
-    // 处理语音消息，可以进行语音识别等操作
-    console.log('处理语音消息:', message.id);
-    
-    // 这里可以添加语音识别逻辑
-    // 例如调用语音识别API，然后将识别结果作为文本消息发送
-  }
-
-  // 获取聊天统计信息
-  getStats() {
-    return {
-      connectedUsers: this.connectedUsers.size,
-      totalRooms: this.chatRooms.size,
-      totalMessages: Array.from(this.messageHistory.values()).reduce((total, history) => total + history.length, 0),
-      roomStats: Array.from(this.chatRooms.entries()).map(([roomId, room]) => ({
-        roomId,
-        name: room.name,
-        userCount: room.users.size,
-        messageCount: this.messageHistory.get(roomId)?.length || 0
-      }))
-    };
-  }
-
-  // 向特定用户发送消息
-  sendToUser(userId, event, data) {
-    for (const [socketId, user] of this.connectedUsers) {
-      if (user.userId === userId) {
-        this.io.to(socketId).emit(event, data);
-        break;
-      }
-    }
-  }
-
-  // 向特定房间发送消息
-  sendToRoom(roomId, event, data) {
-    this.io.to(roomId).emit(event, data);
-  }
-
-  // 广播系统消息
-  broadcastSystemMessage(message, roomId = null) {
-    const systemMessage = {
-      id: Date.now(),
-      type: 'system',
-      content: message,
-      timestamp: new Date()
-    };
-
-    if (roomId) {
-      this.io.to(roomId).emit('message', systemMessage);
-    } else {
-      this.io.emit('message', systemMessage);
-    }
-  }
 }
 
 module.exports = ChatService;
