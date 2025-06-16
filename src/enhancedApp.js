@@ -29,22 +29,6 @@ process.on('uncaughtException', (err) => {
     process.exit(1);
 });
 
-// 导入模型
-const User = require('./models/User');
-const Profile = require('./models/Profile');
-const Topic = require('./models/Topic');
-const Post = require('./models/Post');
-const Comment = require('./models/Comment');
-const Resource = require('./models/Resource');
-const Event = require('./models/Event');
-const Community = require('./models/Community');
-const Message = require('./models/Message');
-const ChatRoom = require('./models/ChatRoom');
-const ChatMessage = require('./models/ChatMessage');
-const CulturalExchange = require('./models/CulturalExchange');
-const LanguageLearningSession = require('./models/LanguageLearningSession');
-const VoiceTranslation = require('./models/VoiceTranslation');
-
 // 导入路由文件
 const auth = require('./routes/auth');
 const profiles = require('./routes/profiles');
@@ -61,6 +45,9 @@ const tokens = require('./routes/tokens');
 const culturalExchange = require('./routes/culturalExchange');
 const languageLearning = require('./routes/languageLearning');
 
+// 导入新的API路由
+const voiceTranslation = require('./routes/voiceTranslation');
+
 // 导入增强版路由
 const enhancedAuth = require('./routes/enhancedAuth');
 const enhancedBlockchain = require('./routes/enhancedBlockchain');
@@ -68,6 +55,7 @@ const enhancedChat = require('./routes/enhancedChat');
 const enhancedVoice = require('./routes/enhancedVoice');
 
 // 导入服务
+const ChatService = require('./services/chatService');
 const EnhancedSocketService = require('./services/enhancedSocketService');
 const EnhancedBlockchainService = require('./services/enhancedBlockchainService');
 const EnhancedVoiceTranslationService = require('./services/enhancedVoiceTranslationService');
@@ -84,7 +72,8 @@ const app = express();
 // 创建HTTP服务器
 const server = http.createServer(app);
 
-// 初始化增强版服务
+// 初始化服务
+let chatService = null;
 let socketService = null;
 let blockchainService = null;
 let voiceService = null;
@@ -92,6 +81,10 @@ let deploymentService = null;
 
 if (process.env.NODE_ENV !== 'test') {
     try {
+        // 初始化聊天服务
+        chatService = new ChatService(server);
+        console.log('✅ 实时聊天服务已初始化');
+        
         // 初始化区块链服务
         blockchainService = new EnhancedBlockchainService();
         console.log('✅ 增强版区块链服务已初始化');
@@ -146,7 +139,9 @@ app.use(cors({
 }));
 
 // 应用安全中间件
-securityMiddleware(app);
+app.use(securityMiddleware.getBasicSecurity());
+app.use(securityMiddleware.getRateLimit('general'));
+app.use(securityMiddleware.requestLogger());
 
 // 设置静态文件夹
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -162,6 +157,7 @@ app.get('/health', async (req, res) => {
         version: '2.0.0',
         services: {
             database: true,
+            chat: !!chatService,
             blockchain: false,
             voice: false,
             socket: false,
@@ -171,6 +167,12 @@ app.get('/health', async (req, res) => {
     
     // 检查各服务状态
     try {
+        if (chatService) {
+            const chatStats = chatService.getStats();
+            healthStatus.services.chat = true;
+            healthStatus.chatStats = chatStats;
+        }
+        
         if (blockchainService) {
             const blockchainHealth = await blockchainService.healthCheck();
             healthStatus.services.blockchain = Object.values(blockchainHealth).every(status => status);
@@ -221,6 +223,7 @@ app.get('/', (req, res) => {
             enhancedBlockchain: '/api/v2/blockchain',
             enhancedChat: '/api/v2/chat',
             enhancedVoice: '/api/v2/voice',
+            voiceTranslation: '/api/v2/voice',
             
             // 标准API
             auth: '/api/v1/auth',
@@ -256,6 +259,10 @@ app.get('/api/status', async (req, res) => {
             services: {}
         };
         
+        if (chatService) {
+            status.services.chat = chatService.getStats();
+        }
+        
         if (socketService) {
             status.services.socket = socketService.getServiceStatus();
         }
@@ -283,139 +290,50 @@ app.get('/api/status', async (req, res) => {
     }
 });
 
+// 挂载新的语音翻译路由
+app.use('/api/v2/voice', voiceTranslation);
+
 // 挂载增强版路由 (v2)
-app.use('/api/v2/auth', enhancedAuth);
-app.use('/api/v2/blockchain', enhancedBlockchain);
-app.use('/api/v2/chat', enhancedChat);
-app.use('/api/v2/voice', enhancedVoice);
+if (enhancedAuth) app.use('/api/v2/auth', enhancedAuth);
+if (enhancedBlockchain) app.use('/api/v2/blockchain', enhancedBlockchain);
+if (enhancedChat) app.use('/api/v2/chat', enhancedChat);
+if (enhancedVoice) app.use('/api/v2/voice-enhanced', enhancedVoice);
 
 // 挂载标准路由 (v1)
 app.use('/api/v1/auth', auth);
+app.use('/api/v1/profiles', profiles);
+app.use('/api/v1/topics', topics);
+app.use('/api/v1/posts', posts);
+app.use('/api/v1/comments', comments);
+app.use('/api/v1/resources', resources);
+app.use('/api/v1/events', events);
+app.use('/api/v1/communities', communities);
+app.use('/api/v1/messages', messages);
 app.use('/api/v1/chat', chat);
 app.use('/api/v1/voice', voice);
 app.use('/api/v1/tokens', tokens);
 app.use('/api/v1/cultural-exchanges', culturalExchange);
 app.use('/api/v1/language-learning', languageLearning);
 
-// 条件挂载区块链路由
-try {
-    const blockchain = require('./routes/blockchain');
-    app.use('/api/v1/blockchain', blockchain);
-} catch (error) {
-    console.warn('⚠️ 标准区块链路由加载失败:', error.message);
-}
-
-// 挂载其他路由（带高级结果中间件）
-app.use('/api/v1/profiles', advancedResults(Profile, { path: 'user', select: 'username email' }), profiles);
-app.use('/api/v1/topics', advancedResults(Topic, { path: 'user', select: 'username' }), topics);
-app.use('/api/v1/posts', advancedResults(Post, [
-    { path: 'user', select: 'username' },
-    { path: 'topic', select: 'title category' }
-]), posts);
-app.use('/api/v1/topics/:topicId/posts', posts);
-app.use('/api/v1/comments', advancedResults(Comment, [
-    { path: 'user', select: 'username' },
-    { path: 'post', select: 'title' }
-]), comments);
-app.use('/api/v1/posts/:postId/comments', comments);
-app.use('/api/v1/resources', advancedResults(Resource, { path: 'user', select: 'username' }), resources);
-app.use('/api/v1/events', advancedResults(Event, { path: 'organizer', select: 'username' }), events);
-app.use('/api/v1/communities', advancedResults(Community, { path: 'creator', select: 'username' }), communities);
-app.use('/api/v1/messages', messages);
-
-// 交易所集成路由
-app.use('/api/exchange', require('./routes/exchangeIntegration'));
-
-// 管理员路由
-app.use('/api/admin', require('./routes/admin'));
-
-// API文档路由（如果存在）
-try {
-    app.use('/api/docs', require('./routes/docs'));
-} catch (error) {
-    console.warn('⚠️ API文档路由不可用');
-}
+// 错误处理中间件
+app.use(errorHandler);
 
 // 404处理
 app.use('*', (req, res) => {
     res.status(404).json({
         success: false,
-        error: `路由 ${req.originalUrl} 不存在`
+        error: '请求的资源不存在'
     });
 });
 
-// 错误处理中间件
-app.use(errorHandler);
-
-// 启动服务器（非测试环境）
-if (process.env.NODE_ENV !== 'test') {
-    const PORT = process.env.PORT || 5000;
-    const HOST = process.env.HOST || '0.0.0.0';
-    
-    server.listen(PORT, HOST, () => {
-        console.log('\n🚀 CultureBridge服务器启动成功!');
-        console.log(`📍 服务器地址: http://${HOST}:${PORT}`);
-        console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`);
-        console.log(`📱 Socket.IO: ${socketService ? '✅ 已启用' : '❌ 未启用'}`);
-        console.log(`⛓️ 区块链服务: ${blockchainService ? '✅ 已启用' : '❌ 未启用'}`);
-        console.log(`🎤 语音翻译: ${voiceService ? '✅ 已启用' : '❌ 未启用'}`);
-        console.log(`🔧 合约部署: ${deploymentService ? '✅ 已启用' : '❌ 未启用'}`);
-        console.log('\n📚 API文档: http://localhost:' + PORT + '/api/docs');
-        console.log('🏥 健康检查: http://localhost:' + PORT + '/health');
-        console.log('📊 服务状态: http://localhost:' + PORT + '/api/status');
-        console.log('\n🎉 准备接收请求...\n');
-    });
-
-    // 处理未捕获的异常
-    process.on('unhandledRejection', (err, promise) => {
-        console.error(`❌ 未处理的Promise拒绝: ${err.message}`);
-        // 关闭服务器并退出进程
-        server.close(() => {
-            console.log('🔄 服务器已关闭，正在退出进程...');
-            process.exit(1);
-        });
-    });
-
-    process.on('uncaughtException', (err) => {
-        console.error(`❌ 未捕获的异常: ${err.message}`);
-        console.error(err.stack);
-        process.exit(1);
-    });
-
-    // 优雅关闭
-    process.on('SIGTERM', () => {
-        console.log('📨 收到SIGTERM信号，正在优雅关闭...');
-        server.close(() => {
-            console.log('✅ HTTP服务器已关闭');
-            
-            // 关闭数据库连接
-            if (process.env.NODE_ENV !== 'test') {
-                require('mongoose').connection.close(() => {
-                    console.log('✅ 数据库连接已关闭');
-                    process.exit(0);
-                });
-            } else {
-                process.exit(0);
-            }
-        });
-    });
-
-    process.on('SIGINT', () => {
-        console.log('\n📨 收到SIGINT信号，正在优雅关闭...');
-        server.close(() => {
-            console.log('✅ 服务器已关闭');
-            process.exit(0);
-        });
-    });
-}
-
 // 导出应用和服务实例
-module.exports = { 
-    app, 
-    server, 
-    socketService, 
-    blockchainService, 
-    voiceService, 
-    deploymentService 
+module.exports = {
+    app,
+    server,
+    chatService,
+    socketService,
+    blockchainService,
+    voiceService,
+    deploymentService
 };
 
