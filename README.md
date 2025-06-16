@@ -1,272 +1,133 @@
-# CultureBridge Backend
+# CultureBridge Backend - 文化桥梁后端服务
 
 ## 项目简介 | Project Overview
 
-CultureBridge后端是一个基于Node.js和Express的RESTful API服务器，为CultureBridge文化交流平台提供完整的后端支持，包括区块链集成、实时聊天、语音翻译和用户管理等功能。
+CultureBridge后端是一个基于Node.js和Express的RESTful API服务，为文化交流和语言学习平台提供完整的后端支持，包括区块链集成、实时通信、AI翻译等核心功能。
 
-CultureBridge Backend is a Node.js and Express-based RESTful API server that provides comprehensive backend support for the CultureBridge cultural exchange platform, including blockchain integration, real-time chat, voice translation, and user management.
+CultureBridge Backend is a Node.js and Express-based RESTful API service that provides comprehensive backend support for the cultural exchange and language learning platform, including blockchain integration, real-time communication, AI translation, and other core features.
 
 ## 主要功能 | Key Features
 
-### 🔗 区块链集成 | Blockchain Integration
-- BNB Smart Chain集成
-- CBT代币智能合约
-- Web3钱包验证
-- 区块链交易处理
+### 🔗 区块链服务 | Blockchain Services
+- BNB链(BSC)集成
+- CBT代币智能合约交互
+- 奖励分发系统
+- 交易历史记录
+- 钱包地址验证
 
-### 💬 实时聊天系统 | Real-time Chat System
-- WebSocket实时通信
-- 多语言聊天室
-- 消息历史记录
+### 🌍 AI翻译服务 | AI Translation Services
+- 支持15种语言翻译
+- 文本翻译API
+- 语音翻译处理
+- 翻译质量评分
+- 翻译历史管理
+
+### 💬 实时通信 | Real-time Communication
+- Socket.IO实时消息
+- 多房间聊天支持
+- 语音消息处理
 - 在线用户管理
-
-### 🎤 语音翻译服务 | Voice Translation Service
-- 语音识别转文字
-- 多语言文本翻译
-- 文字转语音合成
-- 语言自动检测
-
-### 🎁 奖励系统 | Reward System
-- CBT代币奖励分发
-- 用户行为追踪
-- 每日签到奖励
-- 成就系统
+- 消息历史存储
 
 ### 👤 用户管理 | User Management
-- 钱包身份验证
-- JWT令牌管理
-- 用户等级系统
-- 统计数据分析
+- JWT身份验证
+- 用户资料管理
+- 等级系统
+- 奖励统计
+- 权限控制
 
-## 技术栈 | Technology Stack
+### 🛡️ 安全特性 | Security Features
+- 请求频率限制
+- CORS跨域配置
+- 数据验证和清理
+- 错误处理机制
+- 日志记录系统
 
-### 核心框架 | Core Framework
-- **Node.js** - 运行时环境
+## 技术栈 | Tech Stack
+
+### 核心技术 | Core Technologies
+- **Node.js 18+** - 运行时环境
 - **Express.js** - Web框架
-- **WebSocket (ws)** - 实时通信
-- **JWT** - 身份验证
+- **Socket.IO** - 实时通信
+- **MongoDB** - 数据库
+- **Mongoose** - ODM框架
 
-### 区块链 | Blockchain
-- **Web3.js** - 区块链交互
-- **Ethers.js** - 以太坊库
-- **Solidity** - 智能合约
-- **BNB Smart Chain** - 区块链网络
+### 区块链技术 | Blockchain Technologies
+- **Web3.js** - 以太坊交互
+- **ethers.js** - 智能合约交互
+- **BSC (Binance Smart Chain)** - 区块链网络
 
-### 数据存储 | Data Storage
-- **Redis** - 缓存和会话存储
-- **内存存储** - 开发环境数据存储
-- **文件系统** - 日志和临时文件
-
-### 安全性 | Security
-- **Helmet** - 安全头设置
-- **CORS** - 跨域资源共享
-- **Rate Limiting** - 速率限制
-- **Input Validation** - 输入验证
-
-## 快速开始 | Quick Start
-
-### 环境要求 | Prerequisites
-- Node.js 16+
-- npm 或 yarn
-- Redis (可选)
-
-### 安装步骤 | Installation
-
-1. 克隆仓库 | Clone the repository
-```bash
-git clone https://github.com/yb1734492970508/CultureBridge-Backend.git
-cd CultureBridge-Backend
-```
-
-2. 安装依赖 | Install dependencies
-```bash
-npm install
-```
-
-3. 配置环境变量 | Configure environment variables
-```bash
-cp .env.example .env
-# 编辑 .env 文件配置必要的环境变量
-```
-
-4. 启动开发服务器 | Start development server
-```bash
-npm run dev
-```
-
-5. 启动生产服务器 | Start production server
-```bash
-npm start
-```
+### 开发工具 | Development Tools
+- **dotenv** - 环境变量管理
+- **cors** - 跨域资源共享
+- **express-rate-limit** - 频率限制
+- **express-validator** - 数据验证
+- **jsonwebtoken** - JWT认证
 
 ## 项目结构 | Project Structure
 
 ```
 src/
-├── services/                   # 业务服务层
-│   ├── userService.js         # 用户管理服务
-│   ├── rewardService.js       # 奖励系统服务
-│   ├── chatService.js         # 聊天服务
-│   ├── translationService.js  # 翻译服务
-│   └── enhancedBlockchainService.js # 区块链服务
-├── middleware/                 # 中间件
-│   ├── auth.js                # 身份验证中间件
-│   ├── validation.js          # 输入验证中间件
-│   └── rateLimit.js           # 速率限制中间件
-├── routes/                     # 路由定义
-│   ├── auth.js                # 认证路由
-│   ├── users.js               # 用户路由
-│   ├── chat.js                # 聊天路由
-│   ├── translation.js         # 翻译路由
-│   ├── blockchain.js          # 区块链路由
-│   └── rewards.js             # 奖励路由
-├── enhancedServer.js          # 增强版服务器
-├── enhancedApp.js             # 增强版应用
-└── app.js                     # 原始应用入口
-blockchain/
-├── contracts/                  # 智能合约
-│   ├── CultureBridgeToken.sol # CBT代币合约
-│   ├── CultureBridgeExchange.sol # 交易所合约
-│   ├── CultureBridgeMarketplace.sol # 市场合约
-│   └── CultureBridgeIdentity.sol # 身份合约
-├── scripts/                   # 部署脚本
-└── tests/                     # 合约测试
+├── config/              # 配置文件
+│   └── db.js           # 数据库配置
+├── middleware/          # 中间件
+│   ├── auth.js         # 身份验证
+│   ├── error.js        # 错误处理
+│   └── security.js     # 安全中间件
+├── models/              # 数据模型
+│   └── User.js         # 用户模型
+├── routes/              # API路由
+│   ├── auth.js         # 认证路由
+│   ├── blockchain.js   # 区块链路由
+│   ├── translation.js  # 翻译路由
+│   └── ...             # 其他路由
+├── services/            # 业务服务
+│   ├── enhancedBlockchainService.js  # 区块链服务
+│   ├── enhancedTranslationService.js # 翻译服务
+│   └── enhancedSocketService.js      # Socket服务
+├── enhancedApp.js       # 主应用文件
+└── simpleApp.js         # 简化版应用
 ```
 
-## API文档 | API Documentation
+## 安装和运行 | Installation & Setup
 
-### 认证端点 | Authentication Endpoints
+### 环境要求 | Prerequisites
+- Node.js 18.0+
+- npm 8.0+
+- MongoDB 5.0+
+- Redis 6.0+ (可选)
 
-#### POST /api/auth/wallet-login
-钱包登录认证
-```json
-{
-  "walletAddress": "0x...",
-  "signature": "0x...",
-  "message": "Login message"
-}
-```
+### 安装步骤 | Installation Steps
 
-#### POST /api/auth/refresh
-刷新JWT令牌
-```json
-{
-  "refreshToken": "..."
-}
-```
-
-### 用户端点 | User Endpoints
-
-#### GET /api/users/profile
-获取用户资料
+1. **克隆仓库 | Clone Repository**
 ```bash
-Authorization: Bearer <token>
+git clone https://github.com/yb1734492970508/CultureBridge-Backend.git
+cd CultureBridge-Backend
 ```
 
-#### GET /api/users/stats
-获取用户统计
+2. **安装依赖 | Install Dependencies**
 ```bash
-Authorization: Bearer <token>
+npm install
 ```
 
-#### GET /api/users/leaderboard
-获取排行榜
+3. **配置环境变量 | Configure Environment**
 ```bash
-Authorization: Bearer <token>
+cp .env.example .env
+# 编辑.env文件，配置必要的环境变量
 ```
 
-### 聊天端点 | Chat Endpoints
-
-#### GET /api/chat/rooms
-获取聊天室列表
+4. **启动服务 | Start Service**
 ```bash
-Authorization: Bearer <token>
+# 开发模式
+npm run dev
+
+# 生产模式
+npm start
 ```
 
-#### GET /api/chat/rooms/:roomId/messages
-获取聊天历史
-```bash
-Authorization: Bearer <token>
-```
+### 环境配置 | Environment Configuration
 
-#### POST /api/chat/rooms/:roomId/join
-加入聊天室
-```bash
-Authorization: Bearer <token>
-```
-
-### 翻译端点 | Translation Endpoints
-
-#### GET /api/translation/languages
-获取支持的语言列表
-
-#### POST /api/translation/text
-文本翻译
-```json
-{
-  "text": "Hello world",
-  "from": "en",
-  "to": "zh"
-}
-```
-
-#### POST /api/translation/voice
-语音翻译
-```json
-{
-  "audioData": "base64...",
-  "from": "en",
-  "to": "zh"
-}
-```
-
-### 区块链端点 | Blockchain Endpoints
-
-#### GET /api/blockchain/balance/:address
-获取CBT余额
-```bash
-Authorization: Bearer <token>
-```
-
-#### POST /api/blockchain/reward
-分发奖励
-```json
-{
-  "recipient": "0x...",
-  "amount": 1.0,
-  "reason": "Chat message"
-}
-```
-
-#### GET /api/blockchain/transactions/:address
-获取交易历史
-```bash
-Authorization: Bearer <token>
-```
-
-### 奖励端点 | Reward Endpoints
-
-#### GET /api/rewards/history
-获取奖励历史
-```bash
-Authorization: Bearer <token>
-```
-
-#### POST /api/rewards/daily-claim
-领取每日奖励
-```bash
-Authorization: Bearer <token>
-```
-
-#### GET /api/rewards/stats
-获取奖励统计
-```bash
-Authorization: Bearer <token>
-```
-
-## 环境配置 | Environment Configuration
-
-### 环境变量 | Environment Variables
+创建 `.env` 文件并配置以下变量：
 
 ```env
 # 服务器配置
@@ -274,117 +135,205 @@ PORT=5000
 NODE_ENV=development
 
 # 数据库配置
-REDIS_URL=redis://localhost:6379
+MONGODB_URI=mongodb://localhost:27017/culturebridge
 
 # JWT配置
-JWT_SECRET=your-secret-key
-JWT_EXPIRES_IN=24h
+JWT_SECRET=your_jwt_secret_key_here
+JWT_EXPIRE=30d
 
-# 区块链配置
-BLOCKCHAIN_NETWORK=bsc-testnet
-PRIVATE_KEY=your-private-key
+# 区块链配置 (BSC Testnet)
+BSC_RPC_URL=https://data-seed-prebsc-1-s1.binance.org:8545/
+BSC_CHAIN_ID=97
+PRIVATE_KEY=your_private_key_here
 CBT_CONTRACT_ADDRESS=0x...
 
 # 翻译服务配置
-TRANSLATION_API_KEY=your-api-key
+GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
+AZURE_TRANSLATOR_KEY=your_azure_translator_key
+AZURE_TRANSLATOR_REGION=your_azure_region
 
 # 安全配置
 CORS_ORIGIN=http://localhost:3000
-RATE_LIMIT_WINDOW=15
+RATE_LIMIT_WINDOW=900000
 RATE_LIMIT_MAX=100
 ```
 
-## 智能合约 | Smart Contracts
+## API文档 | API Documentation
+
+### 认证相关 | Authentication APIs
+
+#### 用户注册
+```http
+POST /api/auth/register
+Content-Type: application/json
+
+{
+  "username": "testuser",
+  "email": "test@example.com",
+  "password": "password123"
+}
+```
+
+#### 用户登录
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+```
+
+### 区块链相关 | Blockchain APIs
+
+#### 获取网络信息
+```http
+GET /api/blockchain/network
+```
+
+#### 查询代币余额
+```http
+GET /api/blockchain/balance/:address
+```
+
+#### 分发奖励
+```http
+POST /api/blockchain/reward/distribute
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "userAddress": "0x...",
+  "category": 1,
+  "description": "翻译奖励",
+  "amount": "1.0"
+}
+```
+
+#### 代币转账
+```http
+POST /api/blockchain/transfer
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "toAddress": "0x...",
+  "amount": "10.0"
+}
+```
+
+### 翻译相关 | Translation APIs
+
+#### 获取支持的语言
+```http
+GET /api/translation/languages
+```
+
+#### 文本翻译
+```http
+POST /api/translation/translate
+Content-Type: application/json
+
+{
+  "text": "你好",
+  "fromLang": "zh-CN",
+  "toLang": "en"
+}
+```
+
+#### 语音翻译
+```http
+POST /api/translation/voice
+Content-Type: application/json
+
+{
+  "audioData": "data:audio/wav;base64,...",
+  "fromLang": "zh-CN",
+  "toLang": "en"
+}
+```
+
+## 数据库设计 | Database Design
+
+### 用户模型 | User Model
+```javascript
+{
+  username: String,
+  email: String,
+  password: String,
+  walletAddress: String,
+  level: String,
+  experience: Number,
+  tokenStats: {
+    totalEarned: Number,
+    totalSpent: Number,
+    currentBalance: Number
+  },
+  activityStats: {
+    totalMessages: Number,
+    totalTranslations: Number,
+    totalVoiceMessages: Number
+  },
+  socialStats: {
+    friendsCount: Number,
+    followersCount: Number,
+    followingCount: Number
+  }
+}
+```
+
+## 智能合约集成 | Smart Contract Integration
 
 ### CBT代币合约 | CBT Token Contract
-- **名称**: CultureBridge Token
-- **符号**: CBT
-- **小数位**: 18
-- **总供应量**: 1,000,000,000 CBT
-- **功能**: ERC20标准 + 奖励分发
+- **网络**: BSC Testnet
+- **合约地址**: 配置在环境变量中
+- **功能**: 代币转账、余额查询、奖励分发
 
-### 主要合约功能 | Main Contract Features
-- 代币铸造和销毁
-- 奖励自动分发
-- 治理投票功能
-- 质押奖励机制
+### 奖励类别 | Reward Categories
+```javascript
+const REWARD_CATEGORIES = {
+  GENERAL: 0,           // 一般奖励
+  LEARNING_REWARD: 1,   // 学习奖励
+  CULTURAL_REWARD: 2,   // 文化奖励
+  REFERRAL_REWARD: 3,   // 推荐奖励
+  ACHIEVEMENT_REWARD: 4, // 成就奖励
+  DAILY_REWARD: 5,      // 每日奖励
+  SPECIAL_REWARD: 6     // 特殊奖励
+};
+```
 
-## WebSocket事件 | WebSocket Events
+## 实时通信 | Real-time Communication
 
-### 客户端发送事件 | Client Events
-- `join_room` - 加入聊天室
-- `leave_room` - 离开聊天室
+### Socket.IO事件 | Socket.IO Events
+
+#### 客户端发送 | Client Emit
+- `join_room` - 加入房间
+- `leave_room` - 离开房间
 - `send_message` - 发送消息
-- `voice_message` - 发送语音消息
-- `typing_start` - 开始输入
-- `typing_stop` - 停止输入
+- `send_voice_message` - 发送语音消息
+- `translate_message` - 翻译消息
 
-### 服务器发送事件 | Server Events
-- `room_joined` - 成功加入房间
+#### 服务端发送 | Server Emit
+- `welcome` - 欢迎消息
 - `new_message` - 新消息
 - `new_voice_message` - 新语音消息
 - `user_joined` - 用户加入
 - `user_left` - 用户离开
-- `typing_start` - 用户开始输入
-- `typing_stop` - 用户停止输入
-
-## 安全特性 | Security Features
-
-### 身份验证 | Authentication
-- JWT令牌验证
-- 钱包签名验证
-- 刷新令牌机制
-- 会话管理
-
-### 输入验证 | Input Validation
-- 请求参数验证
-- 数据类型检查
-- 长度限制
-- 特殊字符过滤
-
-### 速率限制 | Rate Limiting
-- API调用频率限制
-- IP地址限制
-- 用户级别限制
-- 动态调整机制
-
-## 性能优化 | Performance Optimization
-
-### 缓存策略 | Caching Strategy
-- Redis缓存
-- 内存缓存
-- API响应缓存
-- 数据库查询缓存
-
-### 负载均衡 | Load Balancing
-- 集群模式支持
-- 进程管理
-- 健康检查
-- 故障转移
-
-## 监控和日志 | Monitoring and Logging
-
-### 日志记录 | Logging
-- 请求日志
-- 错误日志
-- 性能日志
-- 安全日志
-
-### 健康检查 | Health Check
-- 服务状态监控
-- 数据库连接检查
-- 外部服务检查
-- 性能指标收集
+- `translation_result` - 翻译结果
+- `reward_earned` - 获得奖励
 
 ## 部署指南 | Deployment Guide
 
 ### Docker部署 | Docker Deployment
-```bash
-# 构建镜像
-docker build -t culturebridge-backend .
-
-# 运行容器
-docker run -p 5000:5000 culturebridge-backend
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 5000
+CMD ["node", "src/enhancedApp.js"]
 ```
 
 ### PM2部署 | PM2 Deployment
@@ -393,73 +342,152 @@ docker run -p 5000:5000 culturebridge-backend
 npm install -g pm2
 
 # 启动应用
-pm2 start ecosystem.config.js
+pm2 start src/enhancedApp.js --name "culturebridge-backend"
 
-# 监控应用
-pm2 monit
+# 查看状态
+pm2 status
+
+# 查看日志
+pm2 logs culturebridge-backend
 ```
 
-## 开发指南 | Development Guide
+### Nginx配置 | Nginx Configuration
+```nginx
+server {
+    listen 80;
+    server_name api.culturebridge.com;
+    
+    location / {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
 
-### 代码规范 | Code Standards
-- 使用ES6+语法
-- 遵循RESTful API设计
-- 实现错误处理
-- 编写单元测试
+## 监控和日志 | Monitoring & Logging
 
-### 测试 | Testing
+### 日志配置 | Logging Configuration
+- 使用Winston进行日志管理
+- 分级日志记录(error, warn, info, debug)
+- 日志文件轮转
+- 错误追踪和报告
+
+### 性能监控 | Performance Monitoring
+- API响应时间监控
+- 数据库查询性能
+- 内存使用情况
+- CPU使用率
+
+## 安全最佳实践 | Security Best Practices
+
+### 数据验证 | Data Validation
+- 使用express-validator验证输入
+- 防止SQL注入和XSS攻击
+- 数据清理和转义
+
+### 访问控制 | Access Control
+- JWT令牌验证
+- 角色权限管理
+- API频率限制
+- CORS配置
+
+### 敏感信息保护 | Sensitive Data Protection
+- 环境变量存储敏感配置
+- 密码哈希存储
+- 私钥安全管理
+
+## 测试指南 | Testing Guide
+
+### 单元测试 | Unit Testing
 ```bash
-# 运行测试
 npm test
+```
 
-# 运行覆盖率测试
-npm run test:coverage
+### API测试 | API Testing
+```bash
+npm run test:api
+```
 
-# 运行集成测试
+### 集成测试 | Integration Testing
+```bash
 npm run test:integration
 ```
 
 ## 贡献指南 | Contributing
 
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开 Pull Request
+### 开发流程 | Development Workflow
+1. Fork项目仓库
+2. 创建功能分支
+3. 编写代码和测试
+4. 提交Pull Request
+
+### 代码规范 | Code Standards
+- 使用ESLint进行代码检查
+- 遵循Airbnb JavaScript规范
+- 添加详细的注释和文档
+- 编写单元测试
+
+## 故障排除 | Troubleshooting
+
+### 常见问题 | Common Issues
+
+#### 数据库连接失败
+```bash
+# 检查MongoDB服务状态
+sudo systemctl status mongod
+
+# 重启MongoDB服务
+sudo systemctl restart mongod
+```
+
+#### 区块链连接问题
+- 检查BSC网络连接
+- 验证私钥配置
+- 确认合约地址正确
+
+#### Socket.IO连接问题
+- 检查CORS配置
+- 验证客户端连接参数
+- 查看服务器日志
 
 ## 许可证 | License
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 联系我们 | Contact
+## 联系我们 | Contact Us
 
-- 项目链接: [https://github.com/yb1734492970508/CultureBridge-Backend](https://github.com/yb1734492970508/CultureBridge-Backend)
-- 前端仓库: [https://github.com/yb1734492970508/CultureBridge-Frontend1](https://github.com/yb1734492970508/CultureBridge-Frontend1)
+- **项目主页**: https://github.com/yb1734492970508/CultureBridge-Backend
+- **问题反馈**: https://github.com/yb1734492970508/CultureBridge-Backend/issues
+- **邮箱**: developer@culturebridge.com
 
 ## 更新日志 | Changelog
 
 ### v2.1.0 (2025-06-16)
-- ✨ 新增增强版服务器架构
-- ✨ 新增完整的用户管理系统
-- ✨ 新增奖励系统和CBT代币集成
-- ✨ 新增实时聊天WebSocket支持
-- ✨ 新增语音翻译服务
-- 🔧 优化API性能和响应速度
-- 🔒 增强安全性和输入验证
-- 📝 完善API文档和错误处理
+- ✨ 新增BNB链区块链集成服务
+- ✨ 实现CBT代币奖励分发系统
+- ✨ 添加增强版翻译服务
+- ✨ 集成Socket.IO实时通信
+- ✨ 优化API性能和安全性
+- 🐛 修复已知问题和漏洞
 
-### v2.0.0 (2025-06-15)
-- 🎉 项目重构，采用微服务架构
-- ✨ 集成BNB链区块链技术
-- ✨ 实现智能合约交互
-- ✨ 添加JWT身份验证
-- 📊 实现用户统计和分析
+### v2.0.0 (2024-12-01)
+- 🎉 项目重构，采用Express.js
+- ✨ 新增JWT身份验证
+- ✨ 实现RESTful API设计
+- ✨ 添加MongoDB数据存储
 
 ---
 
-**构建连接世界的技术基础设施！**
+**为文化交流提供强大的技术支撑！**
 
-**Building the technical infrastructure that connects the world!**
+**Providing powerful technical support for cultural exchange!**
 

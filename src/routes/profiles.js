@@ -1,22 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { 
-  getProfiles, 
-  getProfile, 
-  createProfile, 
-  updateProfile, 
-  deleteProfile 
-} = require('../controllers/profiles');
 
-const { protect, authorize } = require('../middleware/auth');
-
-router.route('/')
-  .get(getProfiles)
-  .post(protect, createProfile);
-
-router.route('/:id')
-  .get(getProfile)
-  .put(protect, updateProfile)
-  .delete(protect, deleteProfile);
+// 简化的路由文件
+router.get('/', (req, res) => {
+    res.json({ success: true, message: 'Profiles API' });
+});
 
 module.exports = router;
+

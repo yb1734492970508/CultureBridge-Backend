@@ -2,6 +2,10 @@ const { Web3 } = require('web3');
 const { ethers } = require('ethers');
 const Redis = require('redis');
 
+/**
+ * 增强版区块链服务
+ * Enhanced Blockchain Service for CultureBridge
+ */
 class EnhancedBlockchainService {
     constructor() {
         // BNB Smart Chain配置
@@ -9,12 +13,14 @@ class EnhancedBlockchainService {
             mainnet: {
                 rpc: process.env.BSC_MAINNET_RPC || 'https://bsc-dataseed1.binance.org:443',
                 chainId: 56,
-                name: 'BSC Mainnet'
+                name: 'BSC Mainnet',
+                explorer: 'https://bscscan.com'
             },
             testnet: {
                 rpc: process.env.BSC_TESTNET_RPC || 'https://data-seed-prebsc-1-s1.binance.org:8545',
                 chainId: 97,
-                name: 'BSC Testnet'
+                name: 'BSC Testnet',
+                explorer: 'https://testnet.bscscan.com'
             }
         };
         
@@ -25,6 +31,11 @@ class EnhancedBlockchainService {
         // 初始化Web3和ethers
         this.web3 = new Web3(this.networkConfig.rpc);
         this.provider = new ethers.JsonRpcProvider(this.networkConfig.rpc);
+        
+        // 管理员钱包配置
+        if (process.env.ADMIN_PRIVATE_KEY) {
+            this.adminWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, this.provider);
+        }
         
         // 合约地址配置
         this.contractAddresses = {
@@ -40,9 +51,6 @@ class EnhancedBlockchainService {
         // 初始化合约
         this.initializeContracts();
         
-        // 启动事件监听
-        this.startEventListening();
-        
         // 交易类别映射
         this.transactionCategories = {
             GENERAL: 0,
@@ -53,448 +61,112 @@ class EnhancedBlockchainService {
             MARKETPLACE_PURCHASE: 5,
             GOVERNANCE_PARTICIPATION: 6
         };
+        
+        // 奖励配置
+        this.rewardRates = {
+            SEND_MESSAGE: ethers.parseEther('0.1'),
+            VOICE_MESSAGE: ethers.parseEther('0.2'),
+            TEXT_TRANSLATION: ethers.parseEther('0.5'),
+            VOICE_TRANSLATION: ethers.parseEther('1.0'),
+            DAILY_LOGIN: ethers.parseEther('1.0'),
+            CONTENT_CREATION: ethers.parseEther('5.0'),
+            CULTURAL_SHARING: ethers.parseEther('10.0')
+        };
+        
+        // 用户等级配置
+        this.userLevels = {
+            BRONZE: { min: 0, max: 99, dailyLimit: ethers.parseEther('50') },
+            SILVER: { min: 100, max: 499, dailyLimit: ethers.parseEther('100') },
+            GOLD: { min: 500, max: 1999, dailyLimit: ethers.parseEther('200') },
+            PLATINUM: { min: 2000, max: 9999, dailyLimit: ethers.parseEther('500') },
+            DIAMOND: { min: 10000, max: Infinity, dailyLimit: ethers.parseEther('1000') }
+        };
+        
+        console.log(`🔗 区块链服务已初始化 - 网络: ${this.networkConfig.name}`);
     }
-    
+
     /**
      * 初始化Redis缓存
      */
     async initializeCache() {
         try {
-            this.redis = Redis.createClient({
-                url: process.env.REDIS_URL || 'redis://localhost:6379'
-            });
-            
-            this.redis.on('error', (err) => {
-                console.warn('Redis连接错误:', err);
-            });
-            
-            await this.redis.connect();
-            console.log('✅ Redis缓存已连接');
+            if (process.env.REDIS_URL) {
+                this.redis = Redis.createClient({
+                    url: process.env.REDIS_URL
+                });
+                
+                this.redis.on('error', (err) => {
+                    console.error('❌ Redis连接错误:', err);
+                });
+                
+                await this.redis.connect();
+                console.log('✅ Redis缓存已连接');
+            }
         } catch (error) {
             console.warn('⚠️ Redis缓存初始化失败，将使用内存缓存:', error.message);
-            this.redis = null;
+            this.cache = new Map();
         }
     }
-    
+
     /**
      * 初始化智能合约
      */
-    initializeContracts() {
+    async initializeContracts() {
         try {
-            // CBT代币合约ABI（完整版）
+            // CBT代币合约ABI（简化版）
             this.cbtTokenABI = [
-                // ERC20标准函数
-                {
-                    "inputs": [{"name": "account", "type": "address"}],
-                    "name": "balanceOf",
-                    "outputs": [{"name": "", "type": "uint256"}],
-                    "type": "function"
-                },
-                {
-                    "inputs": [],
-                    "name": "totalSupply",
-                    "outputs": [{"name": "", "type": "uint256"}],
-                    "type": "function"
-                },
-                // 文化交流特定函数
-                {
-                    "inputs": [
-                        {"name": "to", "type": "address"},
-                        {"name": "amount", "type": "uint256"},
-                        {"name": "purpose", "type": "string"},
-                        {"name": "category", "type": "uint8"},
-                        {"name": "tags", "type": "string[]"}
-                    ],
-                    "name": "transferWithPurpose",
-                    "outputs": [{"name": "", "type": "uint256"}],
-                    "type": "function"
-                },
-                {
-                    "inputs": [
-                        {"name": "recipient", "type": "address"},
-                        {"name": "amount", "type": "uint256"},
-                        {"name": "reason", "type": "string"},
-                        {"name": "category", "type": "uint8"}
-                    ],
-                    "name": "distributeReward",
-                    "outputs": [],
-                    "type": "function"
-                },
-                {
-                    "inputs": [
-                        {"name": "recipients", "type": "address[]"},
-                        {"name": "amounts", "type": "uint256[]"},
-                        {"name": "reasons", "type": "string[]"},
-                        {"name": "category", "type": "uint8"}
-                    ],
-                    "name": "batchDistributeRewards",
-                    "outputs": [],
-                    "type": "function"
-                },
-                {
-                    "inputs": [{"name": "user", "type": "address"}],
-                    "name": "getUserTransactions",
-                    "outputs": [{"name": "", "type": "uint256[]"}],
-                    "type": "function"
-                },
-                {
-                    "inputs": [{"name": "transactionId", "type": "uint256"}],
-                    "name": "getTransaction",
-                    "outputs": [
-                        {"name": "id", "type": "uint256"},
-                        {"name": "from", "type": "address"},
-                        {"name": "to", "type": "address"},
-                        {"name": "amount", "type": "uint256"},
-                        {"name": "purpose", "type": "string"},
-                        {"name": "category", "type": "uint8"},
-                        {"name": "tags", "type": "string[]"},
-                        {"name": "timestamp", "type": "uint256"},
-                        {"name": "isReward", "type": "bool"}
-                    ],
-                    "type": "function"
-                },
-                {
-                    "inputs": [{"name": "user", "type": "address"}],
-                    "name": "getUserStats",
-                    "outputs": [
-                        {"name": "totalEarned", "type": "uint256"},
-                        {"name": "totalSpent", "type": "uint256"},
-                        {"name": "totalTransactions", "type": "uint256"},
-                        {"name": "lastActivityTime", "type": "uint256"}
-                    ],
-                    "type": "function"
-                },
-                {
-                    "inputs": [{"name": "user", "type": "address"}],
-                    "name": "getTodayRewards",
-                    "outputs": [{"name": "", "type": "uint256"}],
-                    "type": "function"
-                },
-                {
-                    "inputs": [{"name": "user", "type": "address"}],
-                    "name": "verifyUser",
-                    "outputs": [],
-                    "type": "function"
-                },
-                // 事件
-                {
-                    "anonymous": false,
-                    "inputs": [
-                        {"indexed": true, "name": "transactionId", "type": "uint256"},
-                        {"indexed": true, "name": "from", "type": "address"},
-                        {"indexed": true, "name": "to", "type": "address"},
-                        {"indexed": false, "name": "amount", "type": "uint256"},
-                        {"indexed": false, "name": "purpose", "type": "string"},
-                        {"indexed": false, "name": "category", "type": "uint8"}
-                    ],
-                    "name": "CulturalTransactionCreated",
-                    "type": "event"
-                },
-                {
-                    "anonymous": false,
-                    "inputs": [
-                        {"indexed": true, "name": "recipient", "type": "address"},
-                        {"indexed": false, "name": "amount", "type": "uint256"},
-                        {"indexed": false, "name": "reason", "type": "string"},
-                        {"indexed": false, "name": "category", "type": "uint8"}
-                    ],
-                    "name": "RewardDistributed",
-                    "type": "event"
-                }
+                "function balanceOf(address owner) view returns (uint256)",
+                "function transfer(address to, uint256 amount) returns (bool)",
+                "function distributeReward(address recipient, uint8 category, string description)",
+                "function claimDailyReward()",
+                "function culturalTransfer(address to, uint256 amount, uint8 category, string description)",
+                "function getUserStats(address user) view returns (uint256 totalEarned, uint256 totalSpent, uint256 transactionCount, uint256 lastActivityTime)",
+                "function getUserCategoryEarnings(address user, uint8 category) view returns (uint256)",
+                "function totalSupply() view returns (uint256)",
+                "function decimals() view returns (uint8)",
+                "function symbol() view returns (string)",
+                "function name() view returns (string)",
+                "event RewardDistributed(address indexed recipient, uint256 amount, uint8 category, string description)",
+                "event CulturalTransactionRecorded(uint256 indexed transactionId, address indexed from, address indexed to, uint256 amount, uint8 category)"
             ];
-            
-            // 初始化合约实例
+
+            // 初始化CBT代币合约
             if (this.contractAddresses.CBT_TOKEN) {
-                this.cbtTokenContract = new this.web3.eth.Contract(
-                    this.cbtTokenABI,
-                    this.contractAddresses.CBT_TOKEN
-                );
-                
-                this.cbtTokenEthersContract = new ethers.Contract(
+                this.cbtTokenContract = new ethers.Contract(
                     this.contractAddresses.CBT_TOKEN,
                     this.cbtTokenABI,
                     this.provider
                 );
                 
+                if (this.adminWallet) {
+                    this.cbtTokenContractWithSigner = this.cbtTokenContract.connect(this.adminWallet);
+                }
+                
                 console.log('✅ CBT代币合约已初始化');
-            } else {
-                console.warn('⚠️ CBT代币合约地址未配置');
             }
+            
         } catch (error) {
             console.error('❌ 合约初始化失败:', error);
         }
     }
-    
+
     /**
-     * 启动事件监听
-     */
-    startEventListening() {
-        if (!this.cbtTokenContract) {
-            console.warn('⚠️ CBT代币合约未初始化，跳过事件监听');
-            return;
-        }
-        
-        try {
-            // 检查合约是否有 events 属性
-            if (!this.cbtTokenContract.events) {
-                console.warn('⚠️ 合约事件接口不可用，跳过事件监听');
-                return;
-            }
-            
-            // 监听文化交流交易事件
-            if (this.cbtTokenContract.events.CulturalTransactionCreated) {
-                this.cbtTokenContract.events.CulturalTransactionCreated()
-                    .on('data', this.handleCulturalTransactionEvent.bind(this))
-                    .on('error', (error) => {
-                        console.error('❌ 文化交流交易事件监听错误:', error);
-                    });
-            }
-            
-            // 监听奖励分发事件
-            if (this.cbtTokenContract.events.RewardDistributed) {
-                this.cbtTokenContract.events.RewardDistributed()
-                    .on('data', this.handleRewardDistributedEvent.bind(this))
-                    .on('error', (error) => {
-                        console.error('❌ 奖励分发事件监听错误:', error);
-                    });
-            }
-            
-            console.log('✅ 区块链事件监听已启动');
-        } catch (error) {
-            console.error('❌ 事件监听启动失败:', error);
-        }
-    }
-    
-    /**
-     * 处理文化交流交易事件
-     */
-    async handleCulturalTransactionEvent(event) {
-        try {
-            const { transactionId, from, to, amount, purpose, category } = event.returnValues;
-            
-            // 缓存交易数据
-            await this.cacheTransactionData(transactionId, {
-                id: transactionId,
-                from,
-                to,
-                amount,
-                purpose,
-                category,
-                blockNumber: event.blockNumber,
-                transactionHash: event.transactionHash,
-                timestamp: Date.now()
-            });
-            
-            console.log(`📝 文化交流交易记录: ${transactionId}`);
-        } catch (error) {
-            console.error('处理文化交流交易事件失败:', error);
-        }
-    }
-    
-    /**
-     * 处理奖励分发事件
-     */
-    async handleRewardDistributedEvent(event) {
-        try {
-            const { recipient, amount, reason, category } = event.returnValues;
-            
-            // 更新用户奖励统计
-            await this.updateUserRewardStats(recipient, amount, reason, category);
-            
-            console.log(`🎁 奖励分发: ${recipient} 获得 ${this.web3.utils.fromWei(amount, 'ether')} CBT`);
-        } catch (error) {
-            console.error('处理奖励分发事件失败:', error);
-        }
-    }
-    
-    /**
-     * 获取用户CBT代币余额（带缓存）
+     * 获取用户CBT余额
      */
     async getUserBalance(userAddress) {
-        const cacheKey = `balance:${userAddress}`;
-        
-        try {
-            // 尝试从缓存获取
-            if (this.redis) {
-                const cachedBalance = await this.redis.get(cacheKey);
-                if (cachedBalance) {
-                    return cachedBalance;
-                }
-            }
-            
-            // 从区块链获取
-            if (!this.cbtTokenContract) {
-                throw new Error('CBT代币合约未初始化');
-            }
-            
-            const balance = await this.cbtTokenContract.methods.balanceOf(userAddress).call();
-            const balanceEther = this.web3.utils.fromWei(balance, 'ether');
-            
-            // 缓存结果（5分钟）
-            if (this.redis) {
-                await this.redis.setEx(cacheKey, 300, balanceEther);
-            }
-            
-            return balanceEther;
-        } catch (error) {
-            console.error('获取用户余额失败:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * 分发奖励代币
-     */
-    async distributeReward(recipientAddress, amount, reason, category, adminPrivateKey) {
         try {
             if (!this.cbtTokenContract) {
                 throw new Error('CBT代币合约未初始化');
             }
             
-            // 验证参数
-            if (!this.isValidAddress(recipientAddress)) {
-                throw new Error('无效的接收者地址');
-            }
-            
-            if (!adminPrivateKey) {
-                throw new Error('管理员私钥未提供');
-            }
-            
-            // 创建管理员账户
-            const adminAccount = this.web3.eth.accounts.privateKeyToAccount(adminPrivateKey);
-            this.web3.eth.accounts.wallet.add(adminAccount);
-            
-            // 转换金额
-            const amountWei = this.web3.utils.toWei(amount.toString(), 'ether');
-            const categoryIndex = this.transactionCategories[category] || 0;
-            
-            // 估算Gas费用
-            const gasEstimate = await this.cbtTokenContract.methods.distributeReward(
-                recipientAddress,
-                amountWei,
-                reason,
-                categoryIndex
-            ).estimateGas({ from: adminAccount.address });
-            
-            // 执行交易
-            const tx = await this.cbtTokenContract.methods.distributeReward(
-                recipientAddress,
-                amountWei,
-                reason,
-                categoryIndex
-            ).send({
-                from: adminAccount.address,
-                gas: Math.floor(gasEstimate * 1.2), // 增加20%的Gas缓冲
-                gasPrice: await this.getOptimalGasPrice()
-            });
-            
-            // 清除相关缓存
-            await this.clearUserCache(recipientAddress);
-            
-            return {
-                transactionHash: tx.transactionHash,
-                blockNumber: tx.blockNumber,
-                gasUsed: tx.gasUsed
-            };
+            const balance = await this.cbtTokenContract.balanceOf(userAddress);
+            return ethers.formatEther(balance);
         } catch (error) {
-            console.error('分发奖励失败:', error);
+            console.error('❌ 获取用户余额失败:', error);
             throw error;
         }
     }
-    
-    /**
-     * 批量分发奖励
-     */
-    async batchDistributeRewards(rewardData, adminPrivateKey) {
-        try {
-            if (!this.cbtTokenContract) {
-                throw new Error('CBT代币合约未初始化');
-            }
-            
-            const recipients = rewardData.map(r => r.recipient);
-            const amounts = rewardData.map(r => this.web3.utils.toWei(r.amount.toString(), 'ether'));
-            const reasons = rewardData.map(r => r.reason);
-            const category = this.transactionCategories[rewardData[0].category] || 0;
-            
-            // 创建管理员账户
-            const adminAccount = this.web3.eth.accounts.privateKeyToAccount(adminPrivateKey);
-            this.web3.eth.accounts.wallet.add(adminAccount);
-            
-            // 执行批量奖励
-            const tx = await this.cbtTokenContract.methods.batchDistributeRewards(
-                recipients,
-                amounts,
-                reasons,
-                category
-            ).send({
-                from: adminAccount.address,
-                gas: 500000 * recipients.length, // 每个奖励预估50万Gas
-                gasPrice: await this.getOptimalGasPrice()
-            });
-            
-            // 清除所有接收者的缓存
-            for (const recipient of recipients) {
-                await this.clearUserCache(recipient);
-            }
-            
-            return {
-                transactionHash: tx.transactionHash,
-                blockNumber: tx.blockNumber,
-                gasUsed: tx.gasUsed,
-                recipientCount: recipients.length
-            };
-        } catch (error) {
-            console.error('批量分发奖励失败:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * 带目的的代币转账
-     */
-    async transferWithPurpose(fromPrivateKey, toAddress, amount, purpose, category, tags) {
-        try {
-            if (!this.cbtTokenContract) {
-                throw new Error('CBT代币合约未初始化');
-            }
-            
-            // 创建发送者账户
-            const fromAccount = this.web3.eth.accounts.privateKeyToAccount(fromPrivateKey);
-            this.web3.eth.accounts.wallet.add(fromAccount);
-            
-            // 转换参数
-            const amountWei = this.web3.utils.toWei(amount.toString(), 'ether');
-            const categoryIndex = this.transactionCategories[category] || 0;
-            
-            // 执行转账
-            const tx = await this.cbtTokenContract.methods.transferWithPurpose(
-                toAddress,
-                amountWei,
-                purpose,
-                categoryIndex,
-                tags || []
-            ).send({
-                from: fromAccount.address,
-                gas: 300000,
-                gasPrice: await this.getOptimalGasPrice()
-            });
-            
-            // 清除相关缓存
-            await this.clearUserCache(fromAccount.address);
-            await this.clearUserCache(toAddress);
-            
-            return {
-                transactionHash: tx.transactionHash,
-                transactionId: tx.events.CulturalTransactionCreated?.returnValues?.transactionId,
-                blockNumber: tx.blockNumber,
-                gasUsed: tx.gasUsed
-            };
-        } catch (error) {
-            console.error('代币转账失败:', error);
-            throw error;
-        }
-    }
-    
+
     /**
      * 获取用户统计信息
      */
@@ -504,294 +176,420 @@ class EnhancedBlockchainService {
                 throw new Error('CBT代币合约未初始化');
             }
             
-            const cacheKey = `stats:${userAddress}`;
-            
-            // 尝试从缓存获取
-            if (this.redis) {
-                const cachedStats = await this.redis.get(cacheKey);
-                if (cachedStats) {
-                    return JSON.parse(cachedStats);
-                }
-            }
-            
-            // 从区块链获取
-            const stats = await this.cbtTokenContract.methods.getUserStats(userAddress).call();
-            const todayRewards = await this.cbtTokenContract.methods.getTodayRewards(userAddress).call();
-            
-            const result = {
-                totalEarned: this.web3.utils.fromWei(stats.totalEarned, 'ether'),
-                totalSpent: this.web3.utils.fromWei(stats.totalSpent, 'ether'),
-                totalTransactions: stats.totalTransactions,
-                lastActivityTime: new Date(parseInt(stats.lastActivityTime) * 1000),
-                todayRewards: this.web3.utils.fromWei(todayRewards, 'ether')
+            const stats = await this.cbtTokenContract.getUserStats(userAddress);
+            return {
+                totalEarned: ethers.formatEther(stats[0]),
+                totalSpent: ethers.formatEther(stats[1]),
+                transactionCount: stats[2].toString(),
+                lastActivityTime: new Date(Number(stats[3]) * 1000)
             };
-            
-            // 缓存结果（10分钟）
-            if (this.redis) {
-                await this.redis.setEx(cacheKey, 600, JSON.stringify(result));
-            }
-            
-            return result;
         } catch (error) {
-            console.error('获取用户统计失败:', error);
+            console.error('❌ 获取用户统计失败:', error);
             throw error;
         }
     }
-    
+
+    /**
+     * 分发奖励
+     */
+    async distributeReward(userAddress, category, description, amount = null) {
+        try {
+            if (!this.cbtTokenContractWithSigner) {
+                throw new Error('管理员钱包未配置');
+            }
+            
+            // 如果没有指定金额，使用默认奖励金额
+            if (!amount) {
+                const categoryKey = Object.keys(this.transactionCategories).find(
+                    key => this.transactionCategories[key] === category
+                );
+                amount = this.rewardRates[categoryKey] || this.rewardRates.GENERAL;
+            }
+            
+            // 检查用户每日限额
+            const userLevel = await this.getUserLevel(userAddress);
+            const dailyEarned = await this.getDailyEarned(userAddress);
+            
+            if (dailyEarned + amount > userLevel.dailyLimit) {
+                throw new Error('超出每日奖励限额');
+            }
+            
+            // 调用智能合约分发奖励
+            const tx = await this.cbtTokenContractWithSigner.distributeReward(
+                userAddress,
+                category,
+                description
+            );
+            
+            await tx.wait();
+            
+            // 更新缓存
+            await this.updateUserCache(userAddress);
+            
+            console.log(`✅ 奖励分发成功: ${userAddress} - ${ethers.formatEther(amount)} CBT`);
+            
+            return {
+                success: true,
+                txHash: tx.hash,
+                amount: ethers.formatEther(amount),
+                category,
+                description
+            };
+            
+        } catch (error) {
+            console.error('❌ 奖励分发失败:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * 批量分发奖励
+     */
+    async batchDistributeRewards(rewards) {
+        const results = [];
+        
+        for (const reward of rewards) {
+            try {
+                const result = await this.distributeReward(
+                    reward.userAddress,
+                    reward.category,
+                    reward.description,
+                    reward.amount
+                );
+                results.push(result);
+            } catch (error) {
+                results.push({
+                    success: false,
+                    error: error.message,
+                    userAddress: reward.userAddress
+                });
+            }
+        }
+        
+        return results;
+    }
+
+    /**
+     * 用户每日登录奖励
+     */
+    async claimDailyReward(userAddress) {
+        try {
+            if (!this.cbtTokenContract) {
+                throw new Error('CBT代币合约未初始化');
+            }
+            
+            // 检查是否已经领取今日奖励
+            const lastClaimTime = await this.getLastClaimTime(userAddress);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            if (lastClaimTime && lastClaimTime >= today) {
+                throw new Error('今日奖励已领取');
+            }
+            
+            // 创建带签名的合约实例
+            const userWallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, this.provider);
+            const contractWithSigner = this.cbtTokenContract.connect(userWallet);
+            
+            const tx = await contractWithSigner.claimDailyReward();
+            await tx.wait();
+            
+            // 更新缓存
+            await this.setLastClaimTime(userAddress, now);
+            await this.updateUserCache(userAddress);
+            
+            console.log(`✅ 每日奖励领取成功: ${userAddress}`);
+            
+            return {
+                success: true,
+                txHash: tx.hash,
+                amount: ethers.formatEther(this.rewardRates.DAILY_LOGIN)
+            };
+            
+        } catch (error) {
+            console.error('❌ 每日奖励领取失败:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * 文化交流转账
+     */
+    async culturalTransfer(fromAddress, toAddress, amount, category, description) {
+        try {
+            if (!this.cbtTokenContract) {
+                throw new Error('CBT代币合约未初始化');
+            }
+            
+            const amountWei = ethers.parseEther(amount.toString());
+            
+            // 这里需要用户的私钥来签名交易
+            // 在实际应用中，这应该在前端完成
+            const tx = await this.cbtTokenContract.culturalTransfer(
+                toAddress,
+                amountWei,
+                category,
+                description
+            );
+            
+            await tx.wait();
+            
+            // 更新缓存
+            await this.updateUserCache(fromAddress);
+            await this.updateUserCache(toAddress);
+            
+            console.log(`✅ 文化交流转账成功: ${fromAddress} -> ${toAddress} - ${amount} CBT`);
+            
+            return {
+                success: true,
+                txHash: tx.hash,
+                from: fromAddress,
+                to: toAddress,
+                amount,
+                category,
+                description
+            };
+            
+        } catch (error) {
+            console.error('❌ 文化交流转账失败:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * 获取用户等级
+     */
+    async getUserLevel(userAddress) {
+        try {
+            const balance = await this.getUserBalance(userAddress);
+            const balanceNum = parseFloat(balance);
+            
+            for (const [level, config] of Object.entries(this.userLevels)) {
+                if (balanceNum >= config.min && balanceNum <= config.max) {
+                    return {
+                        level,
+                        ...config,
+                        currentBalance: balanceNum
+                    };
+                }
+            }
+            
+            return {
+                level: 'DIAMOND',
+                ...this.userLevels.DIAMOND,
+                currentBalance: balanceNum
+            };
+            
+        } catch (error) {
+            console.error('❌ 获取用户等级失败:', error);
+            return {
+                level: 'BRONZE',
+                ...this.userLevels.BRONZE,
+                currentBalance: 0
+            };
+        }
+    }
+
+    /**
+     * 获取用户今日已获得奖励
+     */
+    async getDailyEarned(userAddress) {
+        try {
+            const cacheKey = `daily_earned:${userAddress}:${new Date().toDateString()}`;
+            
+            if (this.redis) {
+                const cached = await this.redis.get(cacheKey);
+                if (cached) {
+                    return ethers.parseEther(cached);
+                }
+            } else if (this.cache) {
+                const cached = this.cache.get(cacheKey);
+                if (cached) {
+                    return ethers.parseEther(cached);
+                }
+            }
+            
+            return ethers.parseEther('0');
+        } catch (error) {
+            console.error('❌ 获取每日奖励失败:', error);
+            return ethers.parseEther('0');
+        }
+    }
+
+    /**
+     * 更新用户缓存
+     */
+    async updateUserCache(userAddress) {
+        try {
+            const balance = await this.getUserBalance(userAddress);
+            const stats = await this.getUserStats(userAddress);
+            const level = await this.getUserLevel(userAddress);
+            
+            const userData = {
+                balance,
+                stats,
+                level,
+                lastUpdated: new Date().toISOString()
+            };
+            
+            const cacheKey = `user:${userAddress}`;
+            
+            if (this.redis) {
+                await this.redis.setEx(cacheKey, 300, JSON.stringify(userData)); // 5分钟缓存
+            } else if (this.cache) {
+                this.cache.set(cacheKey, userData);
+            }
+            
+        } catch (error) {
+            console.error('❌ 更新用户缓存失败:', error);
+        }
+    }
+
+    /**
+     * 获取最后领取时间
+     */
+    async getLastClaimTime(userAddress) {
+        try {
+            const cacheKey = `last_claim:${userAddress}`;
+            
+            if (this.redis) {
+                const cached = await this.redis.get(cacheKey);
+                return cached ? new Date(cached) : null;
+            } else if (this.cache) {
+                return this.cache.get(cacheKey) || null;
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('❌ 获取最后领取时间失败:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 设置最后领取时间
+     */
+    async setLastClaimTime(userAddress, time) {
+        try {
+            const cacheKey = `last_claim:${userAddress}`;
+            
+            if (this.redis) {
+                await this.redis.setEx(cacheKey, 86400, time.toISOString()); // 24小时缓存
+            } else if (this.cache) {
+                this.cache.set(cacheKey, time);
+            }
+            
+        } catch (error) {
+            console.error('❌ 设置最后领取时间失败:', error);
+        }
+    }
+
+    /**
+     * 获取网络信息
+     */
+    getNetworkInfo() {
+        return {
+            network: this.currentNetwork,
+            chainId: this.networkConfig.chainId,
+            name: this.networkConfig.name,
+            rpc: this.networkConfig.rpc,
+            explorer: this.networkConfig.explorer
+        };
+    }
+
+    /**
+     * 获取合约地址
+     */
+    getContractAddresses() {
+        return this.contractAddresses;
+    }
+
+    /**
+     * 验证地址格式
+     */
+    isValidAddress(address) {
+        return ethers.isAddress(address);
+    }
+
     /**
      * 获取交易详情
      */
-    async getTransaction(transactionId) {
+    async getTransactionDetails(txHash) {
         try {
-            if (!this.cbtTokenContract) {
-                throw new Error('CBT代币合约未初始化');
-            }
+            const tx = await this.provider.getTransaction(txHash);
+            const receipt = await this.provider.getTransactionReceipt(txHash);
             
-            const cacheKey = `transaction:${transactionId}`;
-            
-            // 尝试从缓存获取
-            if (this.redis) {
-                const cachedTx = await this.redis.get(cacheKey);
-                if (cachedTx) {
-                    return JSON.parse(cachedTx);
-                }
-            }
-            
-            // 从区块链获取
-            const tx = await this.cbtTokenContract.methods.getTransaction(transactionId).call();
-            
-            const result = {
-                id: tx.id,
-                from: tx.from,
-                to: tx.to,
-                amount: this.web3.utils.fromWei(tx.amount, 'ether'),
-                purpose: tx.purpose,
-                category: Object.keys(this.transactionCategories)[tx.category],
-                tags: tx.tags,
-                timestamp: new Date(parseInt(tx.timestamp) * 1000),
-                isReward: tx.isReward
+            return {
+                transaction: tx,
+                receipt: receipt,
+                status: receipt.status === 1 ? 'success' : 'failed'
             };
-            
-            // 永久缓存（交易不会改变）
-            if (this.redis) {
-                await this.redis.set(cacheKey, JSON.stringify(result));
-            }
-            
-            return result;
         } catch (error) {
-            console.error('获取交易详情失败:', error);
+            console.error('❌ 获取交易详情失败:', error);
             throw error;
         }
     }
-    
+
     /**
-     * 获取用户交易历史
+     * 监听合约事件
      */
-    async getUserTransactions(userAddress, limit = 50, offset = 0) {
-        try {
-            if (!this.cbtTokenContract) {
-                throw new Error('CBT代币合约未初始化');
-            }
-            
-            // 获取用户所有交易ID
-            const transactionIds = await this.cbtTokenContract.methods.getUserTransactions(userAddress).call();
-            
-            // 分页处理
-            const paginatedIds = transactionIds.slice(offset, offset + limit);
-            
-            // 获取交易详情
-            const transactions = [];
-            for (const id of paginatedIds) {
-                try {
-                    const transaction = await this.getTransaction(id);
-                    transactions.push(transaction);
-                } catch (error) {
-                    console.warn(`获取交易 ${id} 失败:`, error);
-                }
-            }
-            
-            return {
-                transactions,
-                total: transactionIds.length,
-                hasMore: offset + limit < transactionIds.length
-            };
-        } catch (error) {
-            console.error('获取用户交易历史失败:', error);
-            throw error;
+    startEventListening() {
+        if (!this.cbtTokenContract) {
+            console.warn('⚠️ CBT代币合约未初始化，无法监听事件');
+            return;
+        }
+
+        // 监听奖励分发事件
+        this.cbtTokenContract.on('RewardDistributed', (recipient, amount, category, description, event) => {
+            console.log('🎉 奖励分发事件:', {
+                recipient,
+                amount: ethers.formatEther(amount),
+                category,
+                description,
+                txHash: event.transactionHash
+            });
+        });
+
+        // 监听文化交流交易事件
+        this.cbtTokenContract.on('CulturalTransactionRecorded', (transactionId, from, to, amount, category, event) => {
+            console.log('🌍 文化交流交易事件:', {
+                transactionId: transactionId.toString(),
+                from,
+                to,
+                amount: ethers.formatEther(amount),
+                category,
+                txHash: event.transactionHash
+            });
+        });
+
+        console.log('👂 开始监听合约事件');
+    }
+
+    /**
+     * 停止事件监听
+     */
+    stopEventListening() {
+        if (this.cbtTokenContract) {
+            this.cbtTokenContract.removeAllListeners();
+            console.log('🔇 停止监听合约事件');
         }
     }
-    
+
     /**
-     * 获取最优Gas价格
+     * 关闭服务
      */
-    async getOptimalGasPrice() {
+    async close() {
         try {
-            const gasPrice = await this.web3.eth.getGasPrice();
-            // 在BSC上，可以使用稍低的Gas价格
-            return Math.floor(gasPrice * 0.9);
-        } catch (error) {
-            console.error('获取Gas价格失败:', error);
-            // 返回默认值（5 Gwei）
-            return this.web3.utils.toWei('5', 'gwei');
-        }
-    }
-    
-    /**
-     * 验证钱包地址
-     */
-    isValidAddress(address) {
-        return this.web3.utils.isAddress(address);
-    }
-    
-    /**
-     * 生成新钱包
-     */
-    generateWallet() {
-        const account = this.web3.eth.accounts.create();
-        return {
-            address: account.address,
-            privateKey: account.privateKey
-        };
-    }
-    
-    /**
-     * 获取BNB余额
-     */
-    async getBNBBalance(address) {
-        try {
-            const balance = await this.web3.eth.getBalance(address);
-            return this.web3.utils.fromWei(balance, 'ether');
-        } catch (error) {
-            console.error('获取BNB余额失败:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * 缓存交易数据
-     */
-    async cacheTransactionData(transactionId, data) {
-        if (!this.redis) return;
-        
-        try {
-            const cacheKey = `transaction:${transactionId}`;
-            await this.redis.set(cacheKey, JSON.stringify(data));
-        } catch (error) {
-            console.warn('缓存交易数据失败:', error);
-        }
-    }
-    
-    /**
-     * 更新用户奖励统计
-     */
-    async updateUserRewardStats(userAddress, amount, reason, category) {
-        if (!this.redis) return;
-        
-        try {
-            const statsKey = `reward_stats:${userAddress}`;
-            const stats = await this.redis.get(statsKey);
-            const currentStats = stats ? JSON.parse(stats) : {
-                totalRewards: 0,
-                rewardCount: 0,
-                categories: {}
-            };
+            this.stopEventListening();
             
-            currentStats.totalRewards += parseFloat(this.web3.utils.fromWei(amount, 'ether'));
-            currentStats.rewardCount += 1;
-            currentStats.categories[category] = (currentStats.categories[category] || 0) + 1;
-            currentStats.lastRewardTime = Date.now();
-            
-            await this.redis.setEx(statsKey, 86400, JSON.stringify(currentStats)); // 24小时缓存
-        } catch (error) {
-            console.warn('更新用户奖励统计失败:', error);
-        }
-    }
-    
-    /**
-     * 清除用户相关缓存
-     */
-    async clearUserCache(userAddress) {
-        if (!this.redis) return;
-        
-        try {
-            const keys = [
-                `balance:${userAddress}`,
-                `stats:${userAddress}`,
-                `reward_stats:${userAddress}`
-            ];
-            
-            await this.redis.del(keys);
-        } catch (error) {
-            console.warn('清除用户缓存失败:', error);
-        }
-    }
-    
-    /**
-     * 获取网络状态
-     */
-    async getNetworkStatus() {
-        try {
-            const [blockNumber, gasPrice, networkId] = await Promise.all([
-                this.web3.eth.getBlockNumber(),
-                this.web3.eth.getGasPrice(),
-                this.web3.eth.net.getId()
-            ]);
-            
-            return {
-                network: this.networkConfig.name,
-                chainId: this.networkConfig.chainId,
-                networkId,
-                blockNumber,
-                gasPrice: this.web3.utils.fromWei(gasPrice, 'gwei') + ' Gwei',
-                isConnected: true
-            };
-        } catch (error) {
-            console.error('获取网络状态失败:', error);
-            return {
-                network: this.networkConfig.name,
-                chainId: this.networkConfig.chainId,
-                isConnected: false,
-                error: error.message
-            };
-        }
-    }
-    
-    /**
-     * 健康检查
-     */
-    async healthCheck() {
-        const status = {
-            blockchain: false,
-            contracts: false,
-            cache: false,
-            events: false
-        };
-        
-        try {
-            // 检查区块链连接
-            await this.web3.eth.getBlockNumber();
-            status.blockchain = true;
-            
-            // 检查合约
-            if (this.cbtTokenContract) {
-                await this.cbtTokenContract.methods.totalSupply().call();
-                status.contracts = true;
-            }
-            
-            // 检查缓存
             if (this.redis) {
-                await this.redis.ping();
-                status.cache = true;
+                await this.redis.quit();
             }
             
-            // 事件监听状态（简化检查）
-            status.events = !!this.cbtTokenContract;
-            
+            console.log('🔒 区块链服务已关闭');
         } catch (error) {
-            console.error('健康检查失败:', error);
+            console.error('❌ 关闭区块链服务失败:', error);
         }
-        
-        return status;
     }
 }
 

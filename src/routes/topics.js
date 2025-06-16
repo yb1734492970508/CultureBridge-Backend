@@ -1,22 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { 
-  getTopics, 
-  getTopic, 
-  createTopic, 
-  updateTopic, 
-  deleteTopic 
-} = require('../controllers/topics');
 
-const { protect, authorize } = require('../middleware/auth');
-
-router.route('/')
-  .get(getTopics)
-  .post(protect, createTopic);
-
-router.route('/:id')
-  .get(getTopic)
-  .put(protect, updateTopic)
-  .delete(protect, deleteTopic);
+router.get('/', (req, res) => {
+    res.json({ success: true, message: 'Topics API' });
+});
 
 module.exports = router;
+

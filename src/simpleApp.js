@@ -1,13 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-const http = require('http');
-const path = require('path');
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const http = require("http");
+const path = require("path");
 
-// 导入新的API路由
-const voiceTranslation = require('./routes/voiceTranslation');
-
-// 导入服务
-const ChatService = require('./services/chatService');
+// 加载环境变量
+dotenv.config();
 
 // 初始化Express应用
 const app = express();
@@ -15,110 +13,58 @@ const app = express();
 // 创建HTTP服务器
 const server = http.createServer(app);
 
-// 初始化聊天服务
-let chatService = null;
-try {
-    chatService = new ChatService(server);
-    console.log('✅ 实时聊天服务已初始化');
-} catch (error) {
-    console.warn('⚠️ 聊天服务初始化失败:', error.message);
-}
-
-// 基础中间件
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// CORS配置
+// 中间件
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
     credentials: true
 }));
 
-// 健康检查端点
-app.get('/health', async (req, res) => {
-    const healthStatus = {
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        environment: process.env.NODE_ENV || 'development',
-        version: '2.0.0',
-        services: {
-            chat: !!chatService,
-            voice: true
-        }
-    };
-    
-    if (chatService) {
-        const chatStats = chatService.getStats();
-        healthStatus.chatStats = chatStats;
-    }
-    
-    res.json(healthStatus);
-});
-
-// API信息端点
+// 基础路由
 app.get('/', (req, res) => {
     res.json({
-        name: 'CultureBridge API',
+        success: true,
+        message: 'CultureBridge API Server',
         version: '2.0.0',
-        description: '跨文化交流平台后端API - 集成区块链和AI技术',
-        features: [
-            '🎤 AI语音翻译（多语言支持）',
-            '💬 实时聊天（支持语音消息）',
-            '🌍 文化交流社区',
-            '📚 语言学习平台'
-        ],
-        endpoints: {
-            voiceTranslation: '/api/v2/voice',
-            health: '/health',
-            status: '/api/status'
-        }
+        timestamp: new Date().toISOString()
     });
 });
 
-// 服务状态端点
-app.get('/api/status', async (req, res) => {
-    try {
-        const status = {
-            server: {
-                uptime: process.uptime(),
-                memory: process.memoryUsage(),
-                cpu: process.cpuUsage()
-            },
-            services: {}
-        };
-        
-        if (chatService) {
-            status.services.chat = chatService.getStats();
-        }
-        
-        res.json(status);
-        
-    } catch (error) {
-        console.error('获取服务状态失败:', error);
-        res.status(500).json({
-            success: false,
-            error: '获取服务状态失败'
-        });
-    }
-});
+// API路由
+app.use("/api/auth", require("./routes/auth"));
+app.use("/api/profiles", require("./routes/profiles"));
+app.use("/api/topics", require("./routes/topics"));
+app.use("/api/posts", require("./routes/posts"));
+app.use("/api/comments", require("./routes/comments"));
+app.use("/api/resources", require("./routes/resources"));
+app.use("/api/events", require("./routes/events"));
+app.use("/api/communities", require("./routes/communities"));
+app.use("/api/messages", require("./routes/messages"));
+app.use("/api/chat", require("./routes/chat"));
+app.use("/api/voice", require("./routes/voice"));
+app.use("/api/tokens", require("./routes/tokens"));
+app.use("/api/cultural-exchange", require("./routes/culturalExchange"));
+app.use("/api/language-learning", require("./routes/languageLearning"));
 
-// 挂载语音翻译路由
-app.use('/api/v2/voice', voiceTranslation);
+// 增强版API路由
+app.use("/api/blockchain", require("./routes/blockchain"));
+app.use("/api/translation", require("./routes/translation"));
+
+// 静态文件服务
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // 404处理
 app.use('*', (req, res) => {
     res.status(404).json({
         success: false,
-        error: '请求的资源不存在'
+        error: 'API路由未找到'
     });
 });
 
 // 错误处理中间件
 app.use((error, req, res, next) => {
-    console.error('API错误:', error);
+    console.error('服务器错误:', error);
     res.status(500).json({
         success: false,
         error: '服务器内部错误'
@@ -126,19 +72,29 @@ app.use((error, req, res, next) => {
 });
 
 // 启动服务器
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 CultureBridge后端服务器已启动`);
-    console.log(`📡 服务器地址: http://localhost:${PORT}`);
-    console.log(`🎤 语音翻译API: http://localhost:${PORT}/api/v2/voice`);
-    console.log(`💬 实时聊天: Socket.IO已启用`);
-    console.log(`📊 健康检查: http://localhost:${PORT}/health`);
+    console.log(`🚀 CultureBridge服务器运行在端口 ${PORT}`);
+    console.log(`🌐 API地址: http://localhost:${PORT}`);
+    console.log(`📱 前端地址: http://localhost:3000`);
 });
 
-// 导出应用和服务实例
-module.exports = {
-    app,
-    server,
-    chatService
-};
+// 优雅关闭
+process.on("SIGTERM", () => {
+    console.log("👋 收到SIGTERM信号，正在关闭服务器...");
+    server.close(() => {
+        console.log("✅ 服务器已关闭");
+        process.exit(0);
+    });
+});
+
+process.on("SIGINT", () => {
+    console.log("👋 收到SIGINT信号，正在关闭服务器...");
+    server.close(() => {
+        console.log("✅ 服务器已关闭");
+        process.exit(0);
+    });
+});
+
+module.exports = app;
 

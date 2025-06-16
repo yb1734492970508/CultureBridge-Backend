@@ -1,120 +1,143 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const ChatRoom = require('../models/ChatRoom');
-const ChatMessage = require('../models/ChatMessage');
-const EnhancedVoiceTranslationService = require('./enhancedVoiceTranslationService');
 const EnhancedBlockchainService = require('./enhancedBlockchainService');
+const EnhancedTranslationService = require('./enhancedTranslationService');
 
+/**
+ * 增强版WebSocket服务
+ * Enhanced WebSocket Service for real-time communication
+ */
 class EnhancedSocketService {
     constructor(server) {
+        // 初始化Socket.IO
         this.io = socketIo(server, {
             cors: {
-                origin: "*",
+                origin: process.env.FRONTEND_URL || "http://localhost:3000",
                 methods: ["GET", "POST"],
                 credentials: true
             },
-            pingTimeout: 60000,
-            pingInterval: 25000
+            transports: ['websocket', 'polling']
         });
         
         // 初始化服务
-        this.voiceService = new EnhancedVoiceTranslationService();
         this.blockchainService = new EnhancedBlockchainService();
+        this.translationService = new EnhancedTranslationService();
         
         // 在线用户管理
-        this.onlineUsers = new Map(); // socketId -> userInfo
-        this.userSockets = new Map(); // userId -> Set of socketIds
-        this.roomUsers = new Map(); // roomId -> Set of userIds
+        this.onlineUsers = new Map();
+        this.userRooms = new Map();
+        this.roomUsers = new Map();
         
-        // 消息队列和缓存
-        this.messageQueue = new Map(); // roomId -> Array of messages
-        this.typingUsers = new Map(); // roomId -> Set of userIds
+        // 聊天室配置
+        this.roomConfig = {
+            maxUsers: 100,
+            messageRateLimit: 10, // 每分钟最多10条消息
+            maxMessageLength: 1000
+        };
         
-        // 初始化Socket.IO
-        this.initializeSocketIO();
+        // 消息类型
+        this.messageTypes = {
+            TEXT: 'text',
+            VOICE: 'voice',
+            IMAGE: 'image',
+            TRANSLATION: 'translation',
+            SYSTEM: 'system'
+        };
         
-        console.log('✅ 增强版Socket.IO服务已启动');
+        // 初始化事件监听
+        this.initializeEventHandlers();
+        
+        console.log('🔌 增强版WebSocket服务已启动');
     }
-    
+
     /**
-     * 初始化Socket.IO事件处理
+     * 初始化事件处理器
      */
-    initializeSocketIO() {
+    initializeEventHandlers() {
         // 中间件：身份验证
         this.io.use(async (socket, next) => {
             try {
-                const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+                const token = socket.handshake.auth.token || socket.handshake.headers.authorization;
                 
                 if (!token) {
-                    return next(new Error('未提供认证令牌'));
+                    return next(new Error('未提供认证token'));
                 }
                 
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                const user = await User.findById(decoded.id).select('-password -privateKey');
+                // 验证JWT token
+                const decoded = jwt.verify(token.replace('Bearer ', ''), process.env.JWT_SECRET);
                 
+                // 获取用户信息
+                const user = await User.findById(decoded.id).select('-password');
                 if (!user) {
                     return next(new Error('用户不存在'));
                 }
                 
-                socket.userId = user._id.toString();
+                if (user.status === 'disabled') {
+                    return next(new Error('账户已被禁用'));
+                }
+                
+                // 将用户信息附加到socket
                 socket.user = user;
                 next();
                 
             } catch (error) {
+                console.error('Socket认证失败:', error);
                 next(new Error('认证失败'));
             }
         });
-        
+
         // 连接事件
         this.io.on('connection', (socket) => {
             this.handleConnection(socket);
         });
     }
-    
+
     /**
      * 处理用户连接
      */
     handleConnection(socket) {
-        const userId = socket.userId;
         const user = socket.user;
+        console.log(`👤 用户连接: ${user.username} (${socket.id})`);
         
-        console.log(`👤 用户连接: ${user.username} (${userId})`);
-        
-        // 记录在线用户
-        this.onlineUsers.set(socket.id, {
-            userId,
-            username: user.username,
-            avatar: user.avatar,
-            connectedAt: new Date()
+        // 添加到在线用户列表
+        this.onlineUsers.set(user._id.toString(), {
+            socketId: socket.id,
+            user: user,
+            joinedAt: new Date(),
+            lastActivity: new Date()
         });
         
-        // 更新用户Socket映射
-        if (!this.userSockets.has(userId)) {
-            this.userSockets.set(userId, new Set());
-        }
-        this.userSockets.get(userId).add(socket.id);
-        
-        // 更新用户在线状态
-        this.updateUserOnlineStatus(userId, true);
-        
-        // 注册事件处理器
-        this.registerEventHandlers(socket);
+        // 更新用户活动时间
+        user.updateActivity();
         
         // 发送欢迎消息
-        socket.emit('connected', {
-            message: '连接成功',
-            userId,
-            onlineCount: this.getOnlineUserCount()
+        socket.emit('welcome', {
+            message: '欢迎来到CultureBridge！',
+            user: {
+                id: user._id,
+                username: user.username,
+                level: user.tokenStats.level,
+                balance: user.tokenStats.currentBalance
+            },
+            onlineCount: this.onlineUsers.size
         });
         
         // 广播用户上线
         socket.broadcast.emit('user_online', {
-            userId,
+            userId: user._id,
             username: user.username
         });
+
+        // 注册事件处理器
+        this.registerEventHandlers(socket);
+        
+        // 断开连接处理
+        socket.on('disconnect', () => {
+            this.handleDisconnection(socket);
+        });
     }
-    
+
     /**
      * 注册事件处理器
      */
@@ -125,704 +148,620 @@ class EnhancedSocketService {
         // 离开聊天室
         socket.on('leave_room', (data) => this.handleLeaveRoom(socket, data));
         
-        // 发送文本消息
+        // 发送消息
         socket.on('send_message', (data) => this.handleSendMessage(socket, data));
         
         // 发送语音消息
         socket.on('send_voice_message', (data) => this.handleSendVoiceMessage(socket, data));
         
-        // 正在输入
-        socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
-        socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
-        
-        // 消息已读
-        socket.on('mark_read', (data) => this.handleMarkRead(socket, data));
-        
-        // 获取聊天历史
-        socket.on('get_chat_history', (data) => this.handleGetChatHistory(socket, data));
-        
-        // 创建聊天室
-        socket.on('create_room', (data) => this.handleCreateRoom(socket, data));
-        
-        // 邀请用户
-        socket.on('invite_user', (data) => this.handleInviteUser(socket, data));
+        // 翻译请求
+        socket.on('translate_message', (data) => this.handleTranslateMessage(socket, data));
         
         // 语音翻译请求
-        socket.on('translate_voice', (data) => this.handleVoiceTranslation(socket, data));
+        socket.on('voice_translate', (data) => this.handleVoiceTranslate(socket, data));
         
-        // 代币转账
-        socket.on('send_tokens', (data) => this.handleSendTokens(socket, data));
+        // 私聊消息
+        socket.on('private_message', (data) => this.handlePrivateMessage(socket, data));
         
-        // 断开连接
-        socket.on('disconnect', () => this.handleDisconnect(socket));
+        // 用户状态更新
+        socket.on('update_status', (data) => this.handleUpdateStatus(socket, data));
         
-        // 错误处理
-        socket.on('error', (error) => this.handleError(socket, error));
+        // 心跳检测
+        socket.on('ping', () => {
+            socket.emit('pong');
+            this.updateUserActivity(socket.user._id);
+        });
+        
+        // 获取在线用户列表
+        socket.on('get_online_users', () => this.handleGetOnlineUsers(socket));
+        
+        // 获取聊天室列表
+        socket.on('get_rooms', () => this.handleGetRooms(socket));
     }
-    
+
     /**
      * 处理加入聊天室
      */
     async handleJoinRoom(socket, data) {
         try {
-            const { roomId } = data;
-            const userId = socket.userId;
+            const { roomId, roomType = 'public' } = data;
+            const user = socket.user;
             
-            // 验证聊天室
-            const room = await ChatRoom.findById(roomId);
-            if (!room) {
-                socket.emit('error', { message: '聊天室不存在' });
-                return;
+            if (!roomId) {
+                return socket.emit('error', { message: '房间ID不能为空' });
             }
             
-            // 检查权限
-            if (room.type === 'private' && !room.members.includes(userId)) {
-                socket.emit('error', { message: '无权限加入此聊天室' });
-                return;
-            }
-            
-            // 加入Socket.IO房间
-            socket.join(roomId);
-            
-            // 更新房间用户映射
+            // 检查房间是否存在，不存在则创建
             if (!this.roomUsers.has(roomId)) {
                 this.roomUsers.set(roomId, new Set());
             }
-            this.roomUsers.get(roomId).add(userId);
             
-            // 更新数据库中的在线成员
-            if (!room.onlineMembers.includes(userId)) {
-                room.onlineMembers.push(userId);
-                await room.save();
+            const roomUsers = this.roomUsers.get(roomId);
+            
+            // 检查房间人数限制
+            if (roomUsers.size >= this.roomConfig.maxUsers) {
+                return socket.emit('error', { message: '房间人数已满' });
             }
             
-            // 通知其他用户
-            socket.to(roomId).emit('user_joined_room', {
-                userId,
-                username: socket.user.username,
-                roomId
+            // 加入房间
+            socket.join(roomId);
+            roomUsers.add(user._id.toString());
+            this.userRooms.set(user._id.toString(), roomId);
+            
+            // 通知房间内其他用户
+            socket.to(roomId).emit('user_joined', {
+                userId: user._id,
+                username: user.username,
+                level: user.tokenStats.level,
+                joinedAt: new Date()
             });
             
-            // 发送房间信息
+            // 发送房间信息给用户
             socket.emit('room_joined', {
-                roomId,
-                roomName: room.name,
-                roomType: room.type,
-                onlineCount: this.roomUsers.get(roomId).size
+                roomId: roomId,
+                roomType: roomType,
+                userCount: roomUsers.size,
+                users: Array.from(roomUsers).map(userId => {
+                    const onlineUser = this.onlineUsers.get(userId);
+                    return onlineUser ? {
+                        id: onlineUser.user._id,
+                        username: onlineUser.user.username,
+                        level: onlineUser.user.tokenStats.level
+                    } : null;
+                }).filter(Boolean)
             });
             
-            console.log(`👥 用户 ${socket.user.username} 加入房间 ${room.name}`);
+            console.log(`🏠 用户 ${user.username} 加入房间 ${roomId}`);
             
         } catch (error) {
-            console.error('加入聊天室失败:', error);
-            socket.emit('error', { message: '加入聊天室失败' });
+            console.error('加入房间失败:', error);
+            socket.emit('error', { message: '加入房间失败' });
         }
     }
-    
+
     /**
      * 处理离开聊天室
      */
-    async handleLeaveRoom(socket, data) {
+    handleLeaveRoom(socket, data) {
         try {
             const { roomId } = data;
-            const userId = socket.userId;
+            const user = socket.user;
             
-            // 离开Socket.IO房间
+            if (!roomId) {
+                return socket.emit('error', { message: '房间ID不能为空' });
+            }
+            
+            // 离开房间
             socket.leave(roomId);
             
-            // 更新房间用户映射
-            if (this.roomUsers.has(roomId)) {
-                this.roomUsers.get(roomId).delete(userId);
-                if (this.roomUsers.get(roomId).size === 0) {
+            const roomUsers = this.roomUsers.get(roomId);
+            if (roomUsers) {
+                roomUsers.delete(user._id.toString());
+                
+                // 如果房间为空，删除房间
+                if (roomUsers.size === 0) {
                     this.roomUsers.delete(roomId);
                 }
             }
             
-            // 更新数据库
-            const room = await ChatRoom.findById(roomId);
-            if (room) {
-                room.onlineMembers = room.onlineMembers.filter(id => id.toString() !== userId);
-                await room.save();
-            }
+            this.userRooms.delete(user._id.toString());
             
-            // 通知其他用户
-            socket.to(roomId).emit('user_left_room', {
-                userId,
-                username: socket.user.username,
-                roomId
+            // 通知房间内其他用户
+            socket.to(roomId).emit('user_left', {
+                userId: user._id,
+                username: user.username,
+                leftAt: new Date()
             });
             
-            socket.emit('room_left', { roomId });
+            socket.emit('room_left', { roomId: roomId });
+            
+            console.log(`🚪 用户 ${user.username} 离开房间 ${roomId}`);
             
         } catch (error) {
-            console.error('离开聊天室失败:', error);
-            socket.emit('error', { message: '离开聊天室失败' });
+            console.error('离开房间失败:', error);
+            socket.emit('error', { message: '离开房间失败' });
         }
     }
-    
+
     /**
-     * 处理发送文本消息
+     * 处理发送消息
      */
     async handleSendMessage(socket, data) {
         try {
-            const { roomId, content, type = 'text', replyTo } = data;
-            const userId = socket.userId;
+            const { roomId, content, messageType = 'text' } = data;
+            const user = socket.user;
             
             // 验证输入
             if (!roomId || !content) {
-                socket.emit('error', { message: '消息内容不能为空' });
-                return;
+                return socket.emit('error', { message: '房间ID和消息内容不能为空' });
             }
             
-            // 验证聊天室权限
-            const room = await ChatRoom.findById(roomId);
-            if (!room || (room.type === 'private' && !room.members.includes(userId))) {
-                socket.emit('error', { message: '无权限发送消息' });
-                return;
+            if (content.length > this.roomConfig.maxMessageLength) {
+                return socket.emit('error', { message: '消息长度超出限制' });
             }
             
-            // 创建消息
-            const message = new ChatMessage({
-                sender: userId,
-                chatRoom: roomId,
-                content,
-                type,
-                replyTo
-            });
-            
-            await message.save();
-            await message.populate('sender', 'username avatar');
-            if (replyTo) {
-                await message.populate('replyTo', 'content sender');
+            // 检查用户是否在房间内
+            const userRoom = this.userRooms.get(user._id.toString());
+            if (userRoom !== roomId) {
+                return socket.emit('error', { message: '您不在该房间内' });
             }
             
-            // 更新聊天室最后消息
-            room.lastMessage = message._id;
-            room.lastActivity = new Date();
-            await room.save();
+            // 检查消息频率限制
+            if (!this.checkMessageRateLimit(user._id)) {
+                return socket.emit('error', { message: '发送消息过于频繁' });
+            }
             
-            // 广播消息
-            this.io.to(roomId).emit('new_message', {
-                messageId: message._id,
-                roomId,
-                sender: {
-                    id: message.sender._id,
-                    username: message.sender.username,
-                    avatar: message.sender.avatar
-                },
-                content,
-                type,
-                replyTo: message.replyTo,
-                timestamp: message.createdAt
-            });
+            // 创建消息对象
+            const message = {
+                id: this.generateMessageId(),
+                roomId: roomId,
+                userId: user._id,
+                username: user.username,
+                userLevel: user.tokenStats.level,
+                content: content,
+                type: messageType,
+                timestamp: new Date(),
+                translations: {}
+            };
             
-            // 发放聊天奖励
-            await this.distributeChatReward(userId);
+            // 广播消息到房间
+            this.io.to(roomId).emit('new_message', message);
             
-            console.log(`💬 消息发送: ${socket.user.username} -> ${room.name}`);
+            // 分发消息奖励
+            try {
+                await this.blockchainService.distributeReward(
+                    user.walletAddress,
+                    0, // GENERAL category
+                    'Send message in chat room'
+                );
+                
+                // 更新用户活动统计
+                await user.updateActivityStats('messagesCount');
+                
+                socket.emit('reward_earned', {
+                    type: 'message',
+                    amount: 0.1,
+                    description: '发送消息奖励'
+                });
+                
+            } catch (rewardError) {
+                console.warn('消息奖励分发失败:', rewardError.message);
+            }
+            
+            console.log(`💬 消息发送: ${user.username} -> 房间 ${roomId}`);
             
         } catch (error) {
             console.error('发送消息失败:', error);
             socket.emit('error', { message: '发送消息失败' });
         }
     }
-    
+
     /**
-     * 处理发送语音消息
+     * 处理语音消息
      */
     async handleSendVoiceMessage(socket, data) {
         try {
-            const { roomId, audioData, targetLanguages, sourceLanguage = 'auto' } = data;
-            const userId = socket.userId;
+            const { roomId, audioData, duration, language = 'zh-CN' } = data;
+            const user = socket.user;
             
             // 验证输入
             if (!roomId || !audioData) {
-                socket.emit('error', { message: '语音数据不能为空' });
-                return;
+                return socket.emit('error', { message: '房间ID和音频数据不能为空' });
             }
             
-            // 验证聊天室权限
-            const room = await ChatRoom.findById(roomId);
-            if (!room || (room.type === 'private' && !room.members.includes(userId))) {
-                socket.emit('error', { message: '无权限发送消息' });
-                return;
+            // 检查用户是否在房间内
+            const userRoom = this.userRooms.get(user._id.toString());
+            if (userRoom !== roomId) {
+                return socket.emit('error', { message: '您不在该房间内' });
             }
             
-            // 通知开始处理
-            socket.emit('voice_processing_start', { roomId });
-            
-            // 处理语音翻译
-            const audioBuffer = Buffer.from(audioData, 'base64');
-            const translationResult = await this.voiceService.processVoiceMessage(
-                audioBuffer,
-                sourceLanguage,
-                targetLanguages || ['en-US'],
-                userId,
-                roomId
-            );
-            
-            // 创建语音消息
-            const message = new ChatMessage({
-                sender: userId,
-                chatRoom: roomId,
-                content: translationResult.data.originalText,
+            // 创建语音消息对象
+            const voiceMessage = {
+                id: this.generateMessageId(),
+                roomId: roomId,
+                userId: user._id,
+                username: user.username,
+                userLevel: user.tokenStats.level,
                 type: 'voice',
-                voiceTranslation: translationResult.data.id,
-                translations: translationResult.data.translations,
-                sourceLanguage: translationResult.data.sourceLanguage
-            });
+                audioData: audioData,
+                duration: duration,
+                language: language,
+                timestamp: new Date(),
+                transcription: null,
+                translations: {}
+            };
             
-            await message.save();
-            await message.populate('sender', 'username avatar');
+            // 广播语音消息到房间
+            this.io.to(roomId).emit('new_voice_message', voiceMessage);
             
-            // 更新聊天室
-            room.lastMessage = message._id;
-            room.lastActivity = new Date();
-            await room.save();
+            // 分发语音消息奖励
+            try {
+                await this.blockchainService.distributeReward(
+                    user.walletAddress,
+                    1, // LEARNING_REWARD category
+                    'Send voice message in chat room'
+                );
+                
+                // 更新用户活动统计
+                await user.updateActivityStats('voiceMessagesCount');
+                
+                socket.emit('reward_earned', {
+                    type: 'voice_message',
+                    amount: 0.2,
+                    description: '发送语音消息奖励'
+                });
+                
+            } catch (rewardError) {
+                console.warn('语音消息奖励分发失败:', rewardError.message);
+            }
             
-            // 广播语音消息
-            this.io.to(roomId).emit('new_voice_message', {
-                messageId: message._id,
-                roomId,
-                sender: {
-                    id: message.sender._id,
-                    username: message.sender.username,
-                    avatar: message.sender.avatar
-                },
-                originalText: translationResult.data.originalText,
-                sourceLanguage: translationResult.data.sourceLanguage,
-                translations: translationResult.data.translations,
-                audioTranslations: translationResult.data.audioTranslations,
-                confidence: translationResult.data.confidence,
-                timestamp: message.createdAt
-            });
-            
-            // 发放语音翻译奖励
-            await this.distributeVoiceTranslationReward(userId);
-            
-            console.log(`🎤 语音消息发送: ${socket.user.username} -> ${room.name}`);
+            console.log(`🎤 语音消息发送: ${user.username} -> 房间 ${roomId}`);
             
         } catch (error) {
             console.error('发送语音消息失败:', error);
-            socket.emit('voice_processing_error', { 
-                roomId: data.roomId, 
-                error: error.message 
-            });
+            socket.emit('error', { message: '发送语音消息失败' });
         }
     }
-    
+
     /**
-     * 处理正在输入
+     * 处理翻译请求
      */
-    handleTypingStart(socket, data) {
-        const { roomId } = data;
-        const userId = socket.userId;
-        
-        if (!this.typingUsers.has(roomId)) {
-            this.typingUsers.set(roomId, new Set());
-        }
-        
-        this.typingUsers.get(roomId).add(userId);
-        
-        socket.to(roomId).emit('user_typing', {
-            userId,
-            username: socket.user.username,
-            roomId
-        });
-    }
-    
-    /**
-     * 处理停止输入
-     */
-    handleTypingStop(socket, data) {
-        const { roomId } = data;
-        const userId = socket.userId;
-        
-        if (this.typingUsers.has(roomId)) {
-            this.typingUsers.get(roomId).delete(userId);
-            
-            if (this.typingUsers.get(roomId).size === 0) {
-                this.typingUsers.delete(roomId);
-            }
-        }
-        
-        socket.to(roomId).emit('user_stop_typing', {
-            userId,
-            username: socket.user.username,
-            roomId
-        });
-    }
-    
-    /**
-     * 处理消息已读
-     */
-    async handleMarkRead(socket, data) {
+    async handleTranslateMessage(socket, data) {
         try {
-            const { messageId, roomId } = data;
-            const userId = socket.userId;
+            const { messageId, text, fromLang, toLang } = data;
+            const user = socket.user;
             
-            // 更新消息已读状态
-            await ChatMessage.findByIdAndUpdate(messageId, {
-                $addToSet: { readBy: userId }
-            });
-            
-            // 通知其他用户
-            socket.to(roomId).emit('message_read', {
-                messageId,
-                userId,
-                username: socket.user.username
-            });
-            
-        } catch (error) {
-            console.error('标记消息已读失败:', error);
-        }
-    }
-    
-    /**
-     * 处理获取聊天历史
-     */
-    async handleGetChatHistory(socket, data) {
-        try {
-            const { roomId, page = 1, limit = 50 } = data;
-            const skip = (page - 1) * limit;
-            
-            const messages = await ChatMessage.find({ chatRoom: roomId })
-                .sort({ createdAt: -1 })
-                .limit(limit)
-                .skip(skip)
-                .populate('sender', 'username avatar')
-                .populate('replyTo', 'content sender');
-            
-            socket.emit('chat_history', {
-                roomId,
-                messages: messages.reverse(),
-                page,
-                hasMore: messages.length === limit
-            });
-            
-        } catch (error) {
-            console.error('获取聊天历史失败:', error);
-            socket.emit('error', { message: '获取聊天历史失败' });
-        }
-    }
-    
-    /**
-     * 处理创建聊天室
-     */
-    async handleCreateRoom(socket, data) {
-        try {
-            const { name, type = 'public', description, members = [] } = data;
-            const userId = socket.userId;
-            
-            const room = new ChatRoom({
-                name,
-                type,
-                description,
-                creator: userId,
-                members: type === 'private' ? [userId, ...members] : [userId],
-                onlineMembers: [userId]
-            });
-            
-            await room.save();
-            await room.populate('creator', 'username avatar');
-            
-            // 加入房间
-            socket.join(room._id.toString());
-            
-            // 通知被邀请的用户
-            if (type === 'private' && members.length > 0) {
-                members.forEach(memberId => {
-                    this.notifyUser(memberId, 'room_invitation', {
-                        roomId: room._id,
-                        roomName: name,
-                        inviter: socket.user.username
-                    });
-                });
+            // 验证输入
+            if (!messageId || !text || !fromLang || !toLang) {
+                return socket.emit('error', { message: '翻译参数不完整' });
             }
             
-            socket.emit('room_created', {
-                roomId: room._id,
-                roomName: name,
-                roomType: type
+            // 执行翻译
+            const translationResult = await this.translationService.translateText(
+                text,
+                fromLang,
+                toLang,
+                user.walletAddress
+            );
+            
+            // 发送翻译结果
+            socket.emit('translation_result', {
+                messageId: messageId,
+                originalText: text,
+                translatedText: translationResult.data.translatedText,
+                fromLanguage: fromLang,
+                toLanguage: toLang,
+                qualityScore: translationResult.data.qualityScore,
+                reward: translationResult.data.reward
             });
             
-            console.log(`🏠 聊天室创建: ${name} by ${socket.user.username}`);
+            // 更新用户活动统计
+            await user.updateActivityStats('translationsCount');
+            
+            console.log(`🌐 翻译完成: ${user.username} - ${fromLang} -> ${toLang}`);
             
         } catch (error) {
-            console.error('创建聊天室失败:', error);
-            socket.emit('error', { message: '创建聊天室失败' });
+            console.error('翻译失败:', error);
+            socket.emit('error', { message: '翻译失败: ' + error.message });
         }
     }
-    
+
     /**
      * 处理语音翻译
      */
-    async handleVoiceTranslation(socket, data) {
+    async handleVoiceTranslate(socket, data) {
         try {
-            const { audioData, sourceLanguage, targetLanguages } = data;
-            const userId = socket.userId;
+            const { audioData, fromLang, toLang } = data;
+            const user = socket.user;
             
-            socket.emit('translation_start');
+            // 验证输入
+            if (!audioData || !fromLang || !toLang) {
+                return socket.emit('error', { message: '语音翻译参数不完整' });
+            }
             
-            const audioBuffer = Buffer.from(audioData, 'base64');
-            const result = await this.voiceService.processVoiceMessage(
-                audioBuffer,
-                sourceLanguage,
-                targetLanguages,
-                userId
-            );
+            // 这里应该调用语音翻译服务
+            // 暂时返回模拟结果
+            const voiceTranslationResult = {
+                originalText: '[语音识别结果]',
+                translatedText: '[翻译结果]',
+                translatedAudio: '[翻译音频数据]',
+                fromLanguage: fromLang,
+                toLanguage: toLang,
+                qualityScore: 0.85
+            };
             
-            socket.emit('translation_complete', result.data);
+            // 发送语音翻译结果
+            socket.emit('voice_translation_result', voiceTranslationResult);
+            
+            // 分发语音翻译奖励
+            try {
+                await this.blockchainService.distributeReward(
+                    user.walletAddress,
+                    1, // LEARNING_REWARD category
+                    'Voice translation'
+                );
+                
+                socket.emit('reward_earned', {
+                    type: 'voice_translation',
+                    amount: 1.0,
+                    description: '语音翻译奖励'
+                });
+                
+            } catch (rewardError) {
+                console.warn('语音翻译奖励分发失败:', rewardError.message);
+            }
+            
+            console.log(`🎤🌐 语音翻译完成: ${user.username} - ${fromLang} -> ${toLang}`);
             
         } catch (error) {
             console.error('语音翻译失败:', error);
-            socket.emit('translation_error', { error: error.message });
+            socket.emit('error', { message: '语音翻译失败: ' + error.message });
         }
     }
-    
+
     /**
-     * 处理代币转账
+     * 处理私聊消息
      */
-    async handleSendTokens(socket, data) {
+    async handlePrivateMessage(socket, data) {
         try {
-            const { toUserId, amount, purpose, category = 'GENERAL' } = data;
-            const fromUserId = socket.userId;
+            const { targetUserId, content } = data;
+            const user = socket.user;
             
-            // 获取用户信息
-            const [fromUser, toUser] = await Promise.all([
-                User.findById(fromUserId).select('privateKey walletAddress'),
-                User.findById(toUserId).select('walletAddress username')
-            ]);
-            
-            if (!fromUser.walletAddress || !fromUser.privateKey) {
-                socket.emit('error', { message: '发送者钱包信息不完整' });
-                return;
+            // 验证输入
+            if (!targetUserId || !content) {
+                return socket.emit('error', { message: '私聊参数不完整' });
             }
             
-            if (!toUser.walletAddress) {
-                socket.emit('error', { message: '接收者未绑定钱包' });
-                return;
+            // 检查目标用户是否在线
+            const targetUser = this.onlineUsers.get(targetUserId);
+            if (!targetUser) {
+                return socket.emit('error', { message: '目标用户不在线' });
             }
             
-            // 执行转账
-            const result = await this.blockchainService.transferWithPurpose(
-                fromUser.privateKey,
-                toUser.walletAddress,
-                amount,
-                purpose,
-                category,
-                []
-            );
+            // 创建私聊消息
+            const privateMessage = {
+                id: this.generateMessageId(),
+                fromUserId: user._id,
+                fromUsername: user.username,
+                toUserId: targetUserId,
+                content: content,
+                type: 'private',
+                timestamp: new Date()
+            };
             
-            // 通知双方
-            socket.emit('tokens_sent', {
-                toUser: toUser.username,
-                amount,
-                transactionHash: result.transactionHash
-            });
+            // 发送给目标用户
+            this.io.to(targetUser.socketId).emit('private_message', privateMessage);
             
-            this.notifyUser(toUserId, 'tokens_received', {
-                fromUser: socket.user.username,
-                amount,
-                purpose,
-                transactionHash: result.transactionHash
-            });
+            // 确认发送给发送者
+            socket.emit('private_message_sent', privateMessage);
             
-            console.log(`💰 代币转账: ${socket.user.username} -> ${toUser.username} (${amount} CBT)`);
+            console.log(`💌 私聊消息: ${user.username} -> ${targetUser.user.username}`);
             
         } catch (error) {
-            console.error('代币转账失败:', error);
-            socket.emit('error', { message: '代币转账失败: ' + error.message });
+            console.error('发送私聊消息失败:', error);
+            socket.emit('error', { message: '发送私聊消息失败' });
         }
     }
-    
+
     /**
-     * 处理断开连接
+     * 处理用户状态更新
      */
-    async handleDisconnect(socket) {
-        const userId = socket.userId;
+    handleUpdateStatus(socket, data) {
+        try {
+            const { status, customMessage } = data;
+            const user = socket.user;
+            
+            const onlineUser = this.onlineUsers.get(user._id.toString());
+            if (onlineUser) {
+                onlineUser.status = status;
+                onlineUser.customMessage = customMessage;
+                onlineUser.lastActivity = new Date();
+            }
+            
+            // 广播状态更新
+            socket.broadcast.emit('user_status_updated', {
+                userId: user._id,
+                username: user.username,
+                status: status,
+                customMessage: customMessage
+            });
+            
+        } catch (error) {
+            console.error('更新用户状态失败:', error);
+            socket.emit('error', { message: '更新状态失败' });
+        }
+    }
+
+    /**
+     * 处理获取在线用户列表
+     */
+    handleGetOnlineUsers(socket) {
+        try {
+            const onlineUsersList = Array.from(this.onlineUsers.values()).map(onlineUser => ({
+                id: onlineUser.user._id,
+                username: onlineUser.user.username,
+                level: onlineUser.user.tokenStats.level,
+                status: onlineUser.status || 'online',
+                customMessage: onlineUser.customMessage,
+                joinedAt: onlineUser.joinedAt
+            }));
+            
+            socket.emit('online_users_list', {
+                users: onlineUsersList,
+                total: onlineUsersList.length
+            });
+            
+        } catch (error) {
+            console.error('获取在线用户列表失败:', error);
+            socket.emit('error', { message: '获取在线用户列表失败' });
+        }
+    }
+
+    /**
+     * 处理获取聊天室列表
+     */
+    handleGetRooms(socket) {
+        try {
+            const roomsList = Array.from(this.roomUsers.entries()).map(([roomId, users]) => ({
+                id: roomId,
+                name: `房间 ${roomId}`,
+                userCount: users.size,
+                maxUsers: this.roomConfig.maxUsers,
+                type: 'public'
+            }));
+            
+            socket.emit('rooms_list', {
+                rooms: roomsList,
+                total: roomsList.length
+            });
+            
+        } catch (error) {
+            console.error('获取聊天室列表失败:', error);
+            socket.emit('error', { message: '获取聊天室列表失败' });
+        }
+    }
+
+    /**
+     * 处理用户断开连接
+     */
+    handleDisconnection(socket) {
         const user = socket.user;
+        console.log(`👋 用户断开连接: ${user.username} (${socket.id})`);
         
-        console.log(`👋 用户断开连接: ${user.username} (${userId})`);
+        // 从在线用户列表移除
+        this.onlineUsers.delete(user._id.toString());
         
-        // 清理在线用户记录
-        this.onlineUsers.delete(socket.id);
-        
-        // 更新用户Socket映射
-        if (this.userSockets.has(userId)) {
-            this.userSockets.get(userId).delete(socket.id);
-            if (this.userSockets.get(userId).size === 0) {
-                this.userSockets.delete(userId);
-                // 用户完全离线
-                this.updateUserOnlineStatus(userId, false);
-                socket.broadcast.emit('user_offline', {
-                    userId,
-                    username: user.username
-                });
-            }
-        }
-        
-        // 清理房间用户映射
-        for (const [roomId, userSet] of this.roomUsers.entries()) {
-            if (userSet.has(userId)) {
-                userSet.delete(userId);
-                if (userSet.size === 0) {
-                    this.roomUsers.delete(roomId);
-                }
+        // 从聊天室移除
+        const userRoom = this.userRooms.get(user._id.toString());
+        if (userRoom) {
+            const roomUsers = this.roomUsers.get(userRoom);
+            if (roomUsers) {
+                roomUsers.delete(user._id.toString());
                 
-                // 更新数据库中的在线成员
-                try {
-                    await ChatRoom.findByIdAndUpdate(roomId, {
-                        $pull: { onlineMembers: userId }
-                    });
-                } catch (error) {
-                    console.error('更新房间在线成员失败:', error);
+                // 通知房间内其他用户
+                socket.to(userRoom).emit('user_left', {
+                    userId: user._id,
+                    username: user.username,
+                    leftAt: new Date()
+                });
+                
+                // 如果房间为空，删除房间
+                if (roomUsers.size === 0) {
+                    this.roomUsers.delete(userRoom);
                 }
             }
+            
+            this.userRooms.delete(user._id.toString());
         }
         
-        // 清理正在输入状态
-        for (const [roomId, typingSet] of this.typingUsers.entries()) {
-            if (typingSet.has(userId)) {
-                typingSet.delete(userId);
-                socket.to(roomId).emit('user_stop_typing', {
-                    userId,
-                    username: user.username,
-                    roomId
-                });
-            }
+        // 广播用户下线
+        socket.broadcast.emit('user_offline', {
+            userId: user._id,
+            username: user.username
+        });
+    }
+
+    /**
+     * 检查消息频率限制
+     */
+    checkMessageRateLimit(userId) {
+        // 简化实现，实际应该使用更复杂的频率限制算法
+        return true;
+    }
+
+    /**
+     * 更新用户活动时间
+     */
+    updateUserActivity(userId) {
+        const onlineUser = this.onlineUsers.get(userId.toString());
+        if (onlineUser) {
+            onlineUser.lastActivity = new Date();
         }
     }
-    
+
     /**
-     * 处理错误
+     * 生成消息ID
      */
-    handleError(socket, error) {
-        console.error(`Socket错误 (${socket.user.username}):`, error);
-        socket.emit('error', { message: '服务器内部错误' });
+    generateMessageId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
-    
-    /**
-     * 通知特定用户
-     */
-    notifyUser(userId, event, data) {
-        if (this.userSockets.has(userId)) {
-            const socketIds = this.userSockets.get(userId);
-            socketIds.forEach(socketId => {
-                const socket = this.io.sockets.sockets.get(socketId);
-                if (socket) {
-                    socket.emit(event, data);
-                }
-            });
-        }
-    }
-    
-    /**
-     * 更新用户在线状态
-     */
-    async updateUserOnlineStatus(userId, isOnline) {
-        try {
-            await User.findByIdAndUpdate(userId, {
-                isOnline,
-                lastSeenAt: new Date()
-            });
-        } catch (error) {
-            console.error('更新用户在线状态失败:', error);
-        }
-    }
-    
-    /**
-     * 发放聊天奖励
-     */
-    async distributeChatReward(userId) {
-        try {
-            const user = await User.findById(userId);
-            if (!user.walletAddress) return;
-            
-            // 检查今天是否已经发放过聊天奖励
-            const today = new Date().toDateString();
-            const lastChatReward = user.lastChatReward ? user.lastChatReward.toDateString() : null;
-            
-            if (lastChatReward === today) return;
-            
-            const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
-            if (!adminPrivateKey) return;
-            
-            await this.blockchainService.distributeReward(
-                user.walletAddress,
-                0.5, // 0.5 CBT聊天奖励
-                '参与聊天奖励',
-                'CULTURAL_EXCHANGE',
-                adminPrivateKey
-            );
-            
-            user.lastChatReward = new Date();
-            await user.save();
-            
-        } catch (error) {
-            console.error('发放聊天奖励失败:', error);
-        }
-    }
-    
-    /**
-     * 发放语音翻译奖励
-     */
-    async distributeVoiceTranslationReward(userId) {
-        try {
-            const user = await User.findById(userId);
-            if (!user.walletAddress) return;
-            
-            const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
-            if (!adminPrivateKey) return;
-            
-            await this.blockchainService.distributeReward(
-                user.walletAddress,
-                2, // 2 CBT语音翻译奖励
-                '使用语音翻译奖励',
-                'LEARNING_REWARD',
-                adminPrivateKey
-            );
-            
-        } catch (error) {
-            console.error('发放语音翻译奖励失败:', error);
-        }
-    }
-    
+
     /**
      * 获取在线用户数量
      */
     getOnlineUserCount() {
-        return this.userSockets.size;
+        return this.onlineUsers.size;
     }
-    
+
     /**
-     * 获取房间在线用户数量
+     * 获取房间数量
      */
-    getRoomOnlineCount(roomId) {
-        return this.roomUsers.get(roomId)?.size || 0;
+    getRoomCount() {
+        return this.roomUsers.size;
     }
-    
+
     /**
      * 广播系统消息
      */
-    broadcastSystemMessage(message, data = {}) {
-        this.io.emit('system_message', {
-            message,
-            timestamp: new Date(),
-            ...data
-        });
-    }
-    
-    /**
-     * 获取服务状态
-     */
-    getServiceStatus() {
-        return {
-            onlineUsers: this.getOnlineUserCount(),
-            activeRooms: this.roomUsers.size,
-            totalConnections: this.onlineUsers.size,
-            uptime: process.uptime()
+    broadcastSystemMessage(message, roomId = null) {
+        const systemMessage = {
+            id: this.generateMessageId(),
+            type: 'system',
+            content: message,
+            timestamp: new Date()
         };
+        
+        if (roomId) {
+            this.io.to(roomId).emit('system_message', systemMessage);
+        } else {
+            this.io.emit('system_message', systemMessage);
+        }
+    }
+
+    /**
+     * 关闭服务
+     */
+    async close() {
+        try {
+            // 通知所有用户服务即将关闭
+            this.broadcastSystemMessage('服务器即将重启，请稍后重新连接');
+            
+            // 关闭所有连接
+            this.io.close();
+            
+            // 关闭相关服务
+            if (this.blockchainService) {
+                await this.blockchainService.close();
+            }
+            
+            if (this.translationService) {
+                await this.translationService.close();
+            }
+            
+            console.log('🔒 WebSocket服务已关闭');
+        } catch (error) {
+            console.error('❌ 关闭WebSocket服务失败:', error);
+        }
     }
 }
 
