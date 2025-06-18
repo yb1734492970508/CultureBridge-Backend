@@ -1,7 +1,7 @@
 {
   "name": "culturebridge-backend",
   "version": "2.0.0",
-  "description": "CultureBridge跨文化交流平台的增强版后端代码 - 集成区块链和AI技术",
+  "description": "CultureBridge跨文化交流平台的后端代码 - 现代化文化学习和交流平台",
   "main": "src/enhancedApp.js",
   "scripts": {
     "start": "node src/enhancedApp.js",
@@ -30,14 +30,12 @@
     "exchange",
     "backend",
     "api",
-    "blockchain",
-    "bnb-chain",
-    "cbt-token",
+    "points-system",
     "voice-translation",
     "ai",
-    "web3",
-    "defi",
-    "social"
+    "social",
+    "language-learning",
+    "cultural-bridge"
   ],
   "author": "CultureBridge Team",
   "license": "MIT",

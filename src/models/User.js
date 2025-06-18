@@ -52,6 +52,54 @@ const userSchema = new mongoose.Schema({
     timezone: String
   },
   
+  // 积分和奖励系统
+  points: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  level: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  experience: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  dailyTasks: [{
+    id: Number,
+    title: String,
+    points: Number,
+    completed: {
+      type: Boolean,
+      default: false
+    },
+    icon: String
+  }],
+  lastTaskDate: Date,
+  achievements: [{
+    id: Number,
+    title: String,
+    description: String,
+    icon: String,
+    unlocked: {
+      type: Boolean,
+      default: false
+    },
+    unlockedDate: Date
+  }],
+  purchases: [{
+    itemId: Number,
+    title: String,
+    cost: Number,
+    purchaseDate: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  
   // 学习数据
   learning: {
     currentCourses: [{
