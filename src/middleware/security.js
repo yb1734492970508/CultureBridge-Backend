@@ -43,5 +43,5 @@ const securityMiddleware = (app) => {
     app.use(hpp());
 };
 
-module.exports = { securityMiddleware };
+module.exports = securityMiddleware;
 

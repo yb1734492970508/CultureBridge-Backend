@@ -1,7 +1,6 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const EnhancedBlockchainService = require('./enhancedBlockchainService');
 const EnhancedTranslationService = require('./enhancedTranslationService');
 
 /**
@@ -21,7 +20,6 @@ class EnhancedSocketService {
         });
         
         // 初始化服务
-        this.blockchainService = new EnhancedBlockchainService();
         this.translationService = new EnhancedTranslationService();
         
         // 在线用户管理

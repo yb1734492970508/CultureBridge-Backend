@@ -1,13 +1,13 @@
-const EnhancedBlockchainService = require('./enhancedBlockchainService');
+const rewardService = require('./rewardService');
 
 /**
  * 增强版AI翻译服务
- * Enhanced AI Translation Service with CBT rewards
+ * Enhanced AI Translation Service with rewards
  */
 class EnhancedTranslationService {
     constructor() {
-        // 初始化区块链服务用于奖励分发
-        this.blockchainService = new EnhancedBlockchainService();
+        // 初始化奖励服务
+        this.rewardService = rewardService;
         
         // 支持的语言配置
         this.supportedLanguages = {
