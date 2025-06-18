@@ -25,7 +25,7 @@ process.on("uncaughtException", (err) => {
 });
 
 // 导入路由文件
-const authRoutes = require("./routes/auth");
+const authRoutes = require("./routes/enhancedAuth");
 const profileRoutes = require("./routes/profiles");
 const topicRoutes = require("./routes/topics");
 const postRoutes = require("./routes/posts");

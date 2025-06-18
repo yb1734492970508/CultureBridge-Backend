@@ -1,14 +1,14 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const enhancedUserService = require('../services/enhancedUserService');
-const auth = require('../middleware/auth');
+const enhancedUserService = require("../services/enhancedUserService");
+const auth = require("../middleware/auth");
 
 /**
  * @route   POST /api/users/register
  * @desc    注册新用户
  * @access  Public
  */
-router.post('/register', async (req, res) => {
+router.post("/register", async (req, res) => {
   try {
     const result = await enhancedUserService.register(req.body);
     
@@ -20,7 +20,7 @@ router.post('/register', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -30,7 +30,7 @@ router.post('/register', async (req, res) => {
  * @desc    用户登录
  * @access  Public
  */
-router.post('/login', async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
     const result = await enhancedUserService.login(req.body);
     
@@ -42,7 +42,7 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -52,7 +52,7 @@ router.post('/login', async (req, res) => {
  * @desc    获取当前用户资料
  * @access  Private
  */
-router.get('/profile', auth, async (req, res) => {
+router.get("/profile", auth, async (req, res) => {
   try {
     const result = await enhancedUserService.getUserProfile(req.user.userId);
     
@@ -64,7 +64,7 @@ router.get('/profile', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -74,7 +74,7 @@ router.get('/profile', auth, async (req, res) => {
  * @desc    更新用户资料
  * @access  Private
  */
-router.put('/profile', auth, async (req, res) => {
+router.put("/profile", auth, async (req, res) => {
   try {
     const result = await enhancedUserService.updateUserProfile(req.user.userId, req.body);
     
@@ -86,7 +86,7 @@ router.put('/profile', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -96,7 +96,7 @@ router.put('/profile', auth, async (req, res) => {
  * @desc    获取用户统计信息
  * @access  Private
  */
-router.get('/stats', auth, async (req, res) => {
+router.get("/stats", auth, async (req, res) => {
   try {
     const result = await enhancedUserService.getUserStats(req.user.userId);
     
@@ -108,7 +108,7 @@ router.get('/stats', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -118,9 +118,9 @@ router.get('/stats', auth, async (req, res) => {
  * @desc    获取用户排行榜
  * @access  Private
  */
-router.get('/leaderboard', auth, async (req, res) => {
+router.get("/leaderboard", auth, async (req, res) => {
   try {
-    const { type = 'total', limit = 50 } = req.query;
+    const { type = "total", limit = 50 } = req.query;
     const result = await enhancedUserService.getUserLeaderboard(type, parseInt(limit));
     
     if (result.success) {
@@ -131,7 +131,7 @@ router.get('/leaderboard', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -141,14 +141,14 @@ router.get('/leaderboard', auth, async (req, res) => {
  * @desc    搜索用户
  * @access  Private
  */
-router.get('/search', auth, async (req, res) => {
+router.get("/search", auth, async (req, res) => {
   try {
     const { q: query, limit = 20 } = req.query;
     
     if (!query || query.trim().length < 2) {
       return res.status(400).json({
         success: false,
-        error: '搜索关键词至少需要2个字符'
+        error: "搜索关键词至少需要2个字符"
       });
     }
     
@@ -166,7 +166,7 @@ router.get('/search', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -176,18 +176,18 @@ router.get('/search', auth, async (req, res) => {
  * @desc    用户登出
  * @access  Private
  */
-router.post('/logout', auth, async (req, res) => {
+router.post("/logout", auth, async (req, res) => {
   try {
     // 在实际应用中，可以将token加入黑名单
     // 这里简单返回成功消息
     res.json({
       success: true,
-      message: '登出成功'
+      message: "登出成功"
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
@@ -197,7 +197,7 @@ router.post('/logout', auth, async (req, res) => {
  * @desc    获取指定用户的公开资料
  * @access  Private
  */
-router.get('/:id/profile', auth, async (req, res) => {
+router.get("/:id/profile", auth, async (req, res) => {
   try {
     const result = await enhancedUserService.getUserProfile(req.params.id);
     
@@ -232,10 +232,11 @@ router.get('/:id/profile', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: '服务器内部错误'
+      error: "服务器内部错误"
     });
   }
 });
 
 module.exports = router;
+
 
