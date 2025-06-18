@@ -42,6 +42,12 @@ const translationRoutes = require("./routes/translation");
 const rewardRoutes = require("./routes/rewards");
 const userRoutes = require("./routes/users");
 
+// 导入新的高级功能路由
+const aiContentAssistantRoutes = require("./routes/aiContentAssistant");
+const communityEnhancedRoutes = require("./routes/communityEnhanced");
+const personalizedRecommendationRoutes = require("./routes/personalizedRecommendation");
+const professionalServiceRoutes = require("./routes/professionalService");
+
 // 导入服务
 const EnhancedSocketService = require("./services/enhancedSocketService");
 const EnhancedTranslationService = require("./services/enhancedTranslationService");
@@ -108,7 +114,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development',
-    version: '2.0.0',
+    version: '3.0.0',
   });
 });
 
@@ -117,7 +123,7 @@ app.get('/api/status', (req, res) => {
   res.status(200).json({
     success: true,
     message: 'CultureBridge API is running',
-    version: '2.0.0',
+    version: '3.0.0',
     features: {
       rewards: true,
       translation: true,
@@ -125,6 +131,10 @@ app.get('/api/status', (req, res) => {
       realTimeChat: true,
       culturalExchange: true,
       languageLearning: true,
+      aiContentAssistant: true,
+      enhancedCommunity: true,
+      personalizedRecommendation: true,
+      professionalService: true,
     },
     timestamp: new Date().toISOString(),
   });
@@ -148,11 +158,17 @@ app.use("/api/translation", translationRoutes);
 app.use("/api/rewards", rewardRoutes);
 app.use("/api/users", userRoutes);
 
+// 新的高级功能路由
+app.use("/api/ai-assistant", aiContentAssistantRoutes);
+app.use("/api/community-enhanced", communityEnhancedRoutes);
+app.use("/api/recommendations", personalizedRecommendationRoutes);
+app.use("/api/professional", professionalServiceRoutes);
+
 // 根路径
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to CultureBridge API v2.0',
-    description: '连接世界文化的学习交流平台',
+    message: 'Welcome to CultureBridge API v3.0',
+    description: '连接世界文化的学习交流平台 - 超越小红书的全球文化交流应用',
     features: [
       '智能奖励系统',
       '实时翻译服务',
@@ -160,6 +176,16 @@ app.get('/', (req, res) => {
       '文化交流社区',
       '语言学习课程',
       '实时聊天通信',
+      'AI智能内容创作与审核助手',
+      '增强的社区互动功能',
+      '个性化推荐系统',
+      '专业化用户服务',
+    ],
+    newFeatures: [
+      'AI内容创作助手 - 智能违禁词检测、内容优化建议、创作灵感推荐',
+      '高级群组管理 - 自定义群组、活动组织、智能推荐',
+      '个性化推荐 - 基于用户画像的内容和社交推荐',
+      '专业用户服务 - 多账号管理、数据分析、自定义报告',
     ],
     documentation: '/api/docs',
     status: '/api/status',
@@ -185,11 +211,12 @@ const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== "test") {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-🚀 CultureBridge服务器已启动
+🚀 CultureBridge服务器已启动 v3.0
 📍 端口: ${PORT}
 🌍 环境: ${process.env.NODE_ENV || 'development'}
 🔗 API地址: http://localhost:${PORT}
 📚 API文档: http://localhost:${PORT}/api/docs
+🤖 新功能: AI内容助手、增强社区、个性化推荐、专业服务
 💖 让世界因文化交流而更加美好！
     `);
   });
