@@ -1,470 +1,288 @@
-# CultureBridge Backend API
+# CultureBridge Backend - 文化桥梁后端服务 | CultureBridge Backend Service
 
-[English](#english) | [中文](#chinese)
+## 🚀 项目概述 | Project Overview
 
----
+CultureBridge Backend是一个现代化的跨文化交流平台后端服务，提供用户管理、文化探索、语言学习、实时聊天等核心功能的API接口。采用Node.js + Express.js开发，支持Socket.IO实时通信。
 
-## English
+CultureBridge Backend is a modern cross-cultural exchange platform backend service that provides API interfaces for user management, cultural exploration, language learning, and real-time chat. Built with Node.js + Express.js and supports Socket.IO real-time communication.
 
-### 🚀 CultureBridge Backend Server
+## ✨ 核心功能 | Core Features
 
-This is the backend server for CultureBridge, a revolutionary cultural exchange platform that combines modern technology, real-time communication, and language learning to create a centralized, secure, and user-friendly experience.
+### 👤 用户管理 | User Management
+- **用户信息管理** | User profile management
+- **积分系统** | Points system
+- **成就系统** | Achievement system
+- **学习进度追踪** | Learning progress tracking
+- **用户统计数据** | User statistics
 
-### 🏗️ Architecture
+### 🌍 文化探索 | Cultural Exploration
+- **文化内容管理** | Cultural content management
+- **分类筛选** | Category filtering
+- **搜索功能** | Search functionality
+- **文化详情** | Cultural details
+- **参与统计** | Participation statistics
 
-The backend follows a modular architecture with the following components:
+### 📚 语言学习 | Language Learning
+- **多语言支持** | Multi-language support
+- **学习进度** | Learning progress
+- **课程管理** | Course management
+- **练习工具** | Practice tools
+- **学习统计** | Learning analytics
 
-- **API Layer**: RESTful APIs for client communication
-- **WebSocket Layer**: Real-time communication for chat and notifications
-- **Reward System**: Centralized point-based reward management
-- **Database Layer**: MongoDB for data persistence
-- **Authentication Layer**: JWT-based user authentication
-- **Translation Service**: Multi-language translation capabilities
+### 💬 实时聊天 | Real-time Chat
+- **多语言聊天室** | Multi-language chat rooms
+- **实时消息** | Real-time messaging
+- **Socket.IO支持** | Socket.IO support
+- **在线用户管理** | Online user management
+- **消息历史** | Message history
 
-### 📁 Project Structure
+## 🛠️ 技术栈 | Tech Stack
+
+- **Node.js** - JavaScript运行环境 | JavaScript runtime
+- **Express.js** - Web应用框架 | Web application framework
+- **Socket.IO** - 实时通信 | Real-time communication
+- **CORS** - 跨域资源共享 | Cross-origin resource sharing
+- **JSON** - 数据交换格式 | Data exchange format
+
+## 📦 项目结构 | Project Structure
 
 ```
 CultureBridge-Backend/
 ├── src/
-│   ├── controllers/          # Request handlers
-│   ├── models/              # Database models
-│   │   └── UserReward.js    # User reward system model
-│   ├── routes/              # API routes
-│   │   └── rewards.js       # Reward system routes
-│   ├── services/            # Business logic
-│   │   ├── rewardService.js # Reward management service
-│   │   ├── chatServer.js
-│   │   ├── contentService.js
-│   │   └── translationService.js
-│   ├── middleware/          # Custom middleware
-│   ├── utils/               # Utility functions
-│   └── enhancedApp.js       # Express app configuration
-├── tests/                   # Test files
-├── docs/                    # API documentation
-└── package.json
+│   ├── modernBackend.js         # 现代化后端主文件 | Modern backend main file
+│   ├── routes/                  # API路由 | API routes
+│   ├── models/                  # 数据模型 | Data models
+│   ├── controllers/             # 控制器 | Controllers
+│   ├── middleware/              # 中间件 | Middleware
+│   ├── services/                # 服务层 | Service layer
+│   └── utils/                   # 工具函数 | Utility functions
+├── package.json                 # 项目配置 | Project configuration
+└── README.md                    # 项目文档 | Project documentation
 ```
 
-### 🔧 Installation & Setup
+## 🔌 API 端点 | API Endpoints
 
-#### Prerequisites
-- Node.js 18+
-- MongoDB 5.0+
-- npm or yarn
+### 健康检查 | Health Check
+```
+GET /health
+```
+返回服务器状态信息 | Returns server status information
 
-#### Installation
+### 用户相关 | User Related
+```
+GET    /api/users/:userId        # 获取用户信息 | Get user info
+PUT    /api/users/:userId        # 更新用户信息 | Update user info
+```
+
+### 积分系统 | Points System
+```
+GET    /api/points/:userId       # 获取用户积分 | Get user points
+POST   /api/points/:userId/add   # 添加积分 | Add points
+```
+
+### 文化探索 | Cultural Exploration
+```
+GET    /api/cultures             # 获取文化列表 | Get culture list
+GET    /api/cultures/:cultureId  # 获取文化详情 | Get culture details
+```
+
+### 语言学习 | Language Learning
+```
+GET    /api/languages/:userId    # 获取用户语言学习信息 | Get user language learning info
+```
+
+### 聊天系统 | Chat System
+```
+GET    /api/chat/rooms                    # 获取聊天室列表 | Get chat room list
+GET    /api/chat/rooms/:roomId/messages   # 获取聊天室消息 | Get chat room messages
+POST   /api/chat/rooms/:roomId/messages   # 发送消息 | Send message
+```
+
+## 🔄 Socket.IO 事件 | Socket.IO Events
+
+### 客户端到服务器 | Client to Server
+- `join_room` - 加入聊天室 | Join chat room
+- `leave_room` - 离开聊天室 | Leave chat room
+- `send_message` - 发送消息 | Send message
+
+### 服务器到客户端 | Server to Client
+- `new_message` - 新消息通知 | New message notification
+
+## 🚀 快速开始 | Quick Start
+
+### 安装依赖 | Install Dependencies
 ```bash
-# Clone the repository
-git clone https://github.com/yb1734492970508/CultureBridge-Backend.git
-cd CultureBridge-Backend
-
-# Install dependencies
 npm install
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your configuration
-
-# Start MongoDB (if running locally)
-mongod
-
-# Run the server
-npm run dev
 ```
 
-#### Environment Variables
-```env
-# Server Configuration
-PORT=5000
-NODE_ENV=development
-
-# Database
-MONGODB_URI=mongodb://localhost:27017/culturebridge
-
-# Authentication
-JWT_SECRET=your_super_secret_jwt_key
-JWT_EXPIRE=7d
-
-# Translation Service
-GOOGLE_TRANSLATE_API_KEY=your_google_translate_key
-AZURE_TRANSLATE_KEY=your_azure_key
-
-# File Upload
-UPLOAD_PATH=./uploads
-MAX_FILE_SIZE=10485760
-
-# Email Service
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
-
-# Redis (for caching)
-REDIS_URL=redis://localhost:6379
+### 启动服务器 | Start Server
+```bash
+node src/modernBackend.js
 ```
 
-### 📚 API Documentation
-
-#### Authentication Endpoints
-
-##### POST /api/auth/register
-Register a new user account.
-
-**Request Body:**
-```json
-{
-  "username": "string",
-  "email": "string",
-  "password": "string",
-  "preferredLanguage": "string"
-}
+### 访问API | Access API
+```
+服务器地址 | Server URL: http://localhost:5000
+健康检查 | Health Check: http://localhost:5000/health
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "token": "jwt_token",
-  "user": {
-    "id": "user_id",
-    "username": "string",
-    "email": "string"
-  }
-}
-```
+## 📊 数据模型 | Data Models
 
-##### POST /api/auth/login
-Authenticate user and get access token.
-
-**Request Body:**
-```json
-{
-  "email": "string",
-  "password": "string"
-}
-```
-
-#### Reward System Endpoints
-
-##### GET /api/rewards/user
-Get current user's reward information.
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "points": {
-      "learning": 1250,
-      "engagement": 800,
-      "contribution": 500,
-      "total": 2550
-    },
-    "level": {
-      "current": 5,
-      "experience": 2550,
-      "nextLevelExp": 3000
-    },
-    "achievements": ["first_lesson", "daily_streak_7"],
-    "checkInData": {
-      "streak": 7,
-      "lastCheckIn": "2024-01-15",
-      "totalCheckIns": 45
-    }
-  }
-}
-```
-
-##### POST /api/rewards/checkin
-Perform daily check-in.
-
-##### POST /api/rewards/points
-Add points to user account.
-
-**Request Body:**
-```json
-{
-  "type": "learning",
-  "amount": 50,
-  "reason": "Completed lesson"
-}
-```
-
-##### GET /api/rewards/shop
-Get available rewards in the shop.
-
-##### GET /api/rewards/leaderboard
-Get user leaderboard.
-
-#### User Endpoints
-
-##### GET /api/users/profile
-Get current user profile (requires authentication).
-
-##### PUT /api/users/profile
-Update user profile.
-
-##### GET /api/users/stats
-Get user statistics (learning progress, points balance, etc.).
-
-#### Chat Endpoints
-
-##### GET /api/chat/rooms
-Get list of available chat rooms.
-
-##### POST /api/chat/rooms
-Create a new chat room.
-
-##### GET /api/chat/rooms/:id/messages
-Get messages from a specific chat room.
-
-##### POST /api/chat/translate
-Translate a message to target language.
-
-#### Learning Endpoints
-
-##### GET /api/learning/courses
-Get available language courses.
-
-##### POST /api/learning/progress
-Update learning progress.
-
-##### GET /api/learning/achievements
-Get user achievements.
-
-### 🔌 WebSocket Events
-
-#### Connection
+### 用户模型 | User Model
 ```javascript
-const socket = io('http://localhost:5000');
+{
+  id: String,
+  name: String,
+  username: String,
+  avatar: String,
+  level: String,
+  points: Number,
+  streak: Number,
+  languagesLearning: Array,
+  culturesExplored: Number,
+  friendsConnected: Number,
+  achievements: Array
+}
 ```
 
-#### Chat Events
-- `join_room`: Join a chat room
-- `leave_room`: Leave a chat room
-- `send_message`: Send a message
-- `receive_message`: Receive a message
-- `typing`: User typing indicator
-- `user_joined`: User joined room
-- `user_left`: User left room
+### 文化模型 | Culture Model
+```javascript
+{
+  id: Number,
+  title: String,
+  description: String,
+  category: String,
+  country: String,
+  image: String,
+  difficulty: String,
+  duration: String,
+  participants: Number
+}
+```
 
-#### Translation Events
-- `translate_request`: Request message translation
-- `translate_response`: Receive translation result
+### 聊天室模型 | Chat Room Model
+```javascript
+{
+  id: Number,
+  name: String,
+  language: String,
+  members: Number,
+  lastMessage: String,
+  time: String,
+  online: Number
+}
+```
 
-#### Notification Events
-- `notification`: Receive real-time notifications
-- `points_earned`: Points earned notification
+### 消息模型 | Message Model
+```javascript
+{
+  id: Number,
+  userId: String,
+  userName: String,
+  avatar: String,
+  message: String,
+  timestamp: String
+}
+```
 
-### 🧪 Testing
+## 🔧 配置选项 | Configuration Options
 
-#### Run Tests
+### 服务器配置 | Server Configuration
+- **端口** | Port: 5000 (可通过环境变量PORT修改 | Configurable via PORT environment variable)
+- **主机** | Host: 0.0.0.0 (允许外部访问 | Allows external access)
+- **CORS** | CORS: 允许所有来源 | Allows all origins
+
+### Socket.IO配置 | Socket.IO Configuration
+- **CORS** | CORS: 允许所有来源和方法 | Allows all origins and methods
+- **传输方式** | Transport: WebSocket, Polling
+
+## 🛡️ 安全性 | Security
+
+### CORS配置 | CORS Configuration
+- 允许所有来源访问 | Allows access from all origins
+- 支持凭据传递 | Supports credential passing
+- 适用于开发和测试环境 | Suitable for development and testing
+
+### 错误处理 | Error Handling
+- 全局错误处理中间件 | Global error handling middleware
+- 404错误处理 | 404 error handling
+- 详细错误日志 | Detailed error logging
+
+## 📈 性能优化 | Performance Optimization
+
+### 内存数据存储 | In-Memory Data Storage
+- 使用Map数据结构 | Uses Map data structure
+- 快速数据访问 | Fast data access
+- 适合原型开发 | Suitable for prototype development
+
+### 实时通信优化 | Real-time Communication Optimization
+- Socket.IO房间管理 | Socket.IO room management
+- 事件驱动架构 | Event-driven architecture
+- 高效消息广播 | Efficient message broadcasting
+
+## 🔄 扩展性 | Scalability
+
+### 数据库集成 | Database Integration
+- 支持MongoDB集成 | Supports MongoDB integration
+- 支持MySQL集成 | Supports MySQL integration
+- 模块化数据访问层 | Modular data access layer
+
+### 微服务架构 | Microservices Architecture
+- 模块化设计 | Modular design
+- 服务分离 | Service separation
+- API网关支持 | API gateway support
+
+## 🧪 测试 | Testing
+
+### API测试 | API Testing
 ```bash
-# Run all tests
-npm test
+# 健康检查 | Health check
+curl http://localhost:5000/health
 
-# Run tests with coverage
-npm run test:coverage
+# 获取用户信息 | Get user info
+curl http://localhost:5000/api/users/user1
 
-# Run specific test file
-npm test tests/auth.test.js
+# 获取文化列表 | Get culture list
+curl http://localhost:5000/api/cultures
 ```
 
-#### Test Structure
-```
-tests/
-├── unit/                    # Unit tests
-│   ├── services/
-│   ├── controllers/
-│   └── utils/
-├── integration/             # Integration tests
-│   ├── auth.test.js
-│   ├── chat.test.js
-│   └── rewards.test.js
-└── fixtures/               # Test data
-```
+### Socket.IO测试 | Socket.IO Testing
+- 使用Socket.IO客户端测试 | Test with Socket.IO client
+- 实时消息功能验证 | Real-time messaging verification
+- 房间管理功能测试 | Room management testing
 
-### 🔒 Security Features
+## 📝 开发指南 | Development Guide
 
-- **JWT Authentication**: Secure token-based authentication
-- **Rate Limiting**: Prevent API abuse
-- **Input Validation**: Sanitize and validate all inputs
-- **CORS Protection**: Configure cross-origin requests
-- **Helmet.js**: Security headers
-- **bcrypt**: Password hashing
-- **MongoDB Injection Protection**: Prevent NoSQL injection
+### 添加新API | Adding New APIs
+1. 在相应路由文件中定义端点 | Define endpoints in route files
+2. 实现业务逻辑 | Implement business logic
+3. 添加错误处理 | Add error handling
+4. 更新API文档 | Update API documentation
 
-### 📊 Performance Monitoring
+### 数据模型扩展 | Data Model Extension
+1. 定义新的数据结构 | Define new data structures
+2. 更新初始化数据 | Update initialization data
+3. 实现CRUD操作 | Implement CRUD operations
+4. 添加数据验证 | Add data validation
 
-- **Response Time Monitoring**: Track API response times
-- **Error Logging**: Comprehensive error tracking
-- **Database Query Optimization**: Indexed queries
-- **Caching**: Redis-based caching for frequently accessed data
-- **Load Balancing**: Support for horizontal scaling
+## 🌍 国际化 | Internationalization
 
-### 🚀 Deployment
+### 多语言支持 | Multi-language Support
+- API响应支持多语言 | Multi-language API responses
+- 错误消息本地化 | Localized error messages
+- 文化内容多语言 | Multi-language cultural content
 
-#### Docker Deployment
-```bash
-# Build Docker image
-docker build -t culturebridge-backend .
+## 📞 联系我们 | Contact Us
 
-# Run container
-docker run -p 5000:5000 culturebridge-backend
-```
+- **项目仓库** | Project Repository: [GitHub](https://github.com/yb1734492970508/CultureBridge-Backend)
+- **问题反馈** | Issue Reporting: GitHub Issues
+- **功能建议** | Feature Requests: GitHub Discussions
 
-#### Production Environment
-```bash
-# Install PM2 for process management
-npm install -g pm2
+## 📄 许可证 | License
 
-# Start application with PM2
-pm2 start ecosystem.config.js
-
-# Monitor application
-pm2 monit
-```
-
-### 📈 Monitoring & Logging
-
-- **Winston**: Structured logging
-- **Morgan**: HTTP request logging
-- **Health Check Endpoint**: `/api/health`
-- **Metrics Endpoint**: `/api/metrics`
+本项目采用 MIT 许可证 | This project is licensed under the MIT License.
 
 ---
 
-## Chinese
-
-### 🚀 CultureBridge 后端服务器
-
-这是CultureBridge的后端服务器，一个结合现代技术、实时通信和语言学习的革命性文化交流平台，提供中心化、安全且用户友好的体验。
-
-### 🏗️ 架构
-
-后端采用模块化架构，包含以下组件：
-
-- **API层**: 客户端通信的RESTful API
-- **WebSocket层**: 聊天和通知的实时通信
-- **奖励系统**: 中心化的基于积分的奖励管理
-- **数据库层**: MongoDB数据持久化
-- **认证层**: 基于JWT的用户认证
-- **翻译服务**: 多语言翻译功能
-
-### 📁 项目结构
-
-```
-CultureBridge-Backend/
-├── src/
-│   ├── controllers/          # 请求处理器
-│   ├── models/              # 数据库模型
-│   │   └── UserReward.js    # 用户奖励系统模型
-│   ├── routes/              # API路由
-│   │   └── rewards.js       # 奖励系统路由
-│   ├── services/            # 业务逻辑
-│   │   ├── rewardService.js # 奖励管理服务
-│   │   ├── chatServer.js
-│   │   ├── contentService.js
-│   │   └── translationService.js
-│   ├── middleware/          # 自定义中间件
-│   ├── utils/               # 工具函数
-│   └── enhancedApp.js       # Express应用配置
-├── tests/                   # 测试文件
-├── docs/                    # API文档
-└── package.json
-```
-
-### 🔧 安装和设置
-
-#### 前置要求
-- Node.js 18+
-- MongoDB 5.0+
-- npm或yarn
-
-#### 安装
-```bash
-# 克隆仓库
-git clone https://github.com/yb1734492970508/CultureBridge-Backend.git
-cd CultureBridge-Backend
-
-# 安装依赖
-npm install
-
-# 设置环境变量
-cp .env.example .env
-# 编辑.env文件配置
-
-# 启动MongoDB（如果本地运行）
-mongod
-
-# 运行服务器
-npm run dev
-```
-
-### 🎁 奖励系统
-
-#### 积分类型
-- **学习积分**: 通过完成课程和练习获得
-- **互动积分**: 通过社区参与和聊天获得
-- **贡献积分**: 通过帮助他人和创建内容获得
-
-#### 等级系统
-- 基于总积分的用户等级
-- 每个等级解锁新的特权和奖励
-- 经验值系统跟踪进度
-
-#### 成就系统
-- 多样化的成就徽章
-- 特殊里程碑奖励
-- 社区认可系统
-
-### 🧪 测试
-
-#### 运行测试
-```bash
-# 运行所有测试
-npm test
-
-# 运行覆盖率测试
-npm run test:coverage
-
-# 运行特定测试文件
-npm test tests/auth.test.js
-```
-
-### 🔒 安全功能
-
-- **JWT认证**: 安全的基于令牌的认证
-- **速率限制**: 防止API滥用
-- **输入验证**: 清理和验证所有输入
-- **CORS保护**: 配置跨域请求
-- **Helmet.js**: 安全头部
-- **bcrypt**: 密码哈希
-- **MongoDB注入保护**: 防止NoSQL注入
-
-### 🚀 部署
-
-#### Docker部署
-```bash
-# 构建Docker镜像
-docker build -t culturebridge-backend .
-
-# 运行容器
-docker run -p 5000:5000 culturebridge-backend
-```
-
-#### 生产环境
-```bash
-# 安装PM2进程管理
-npm install -g pm2
-
-# 使用PM2启动应用
-pm2 start ecosystem.config.js
-
-# 监控应用
-pm2 monit
-```
-
----
-
-*CultureBridge Backend - 强大的文化交流平台后端服务 | Powerful Backend for Cultural Exchange Platform*
+**CultureBridge Backend - 连接世界的技术桥梁 | Technical Bridge Connecting the World** 🌉
 
