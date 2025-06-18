@@ -8,7 +8,7 @@
 
 ### 🚀 CultureBridge Backend Server
 
-This is the backend server for CultureBridge, a revolutionary cultural exchange platform that combines blockchain technology, real-time communication, and language learning.
+This is the backend server for CultureBridge, a revolutionary cultural exchange platform that combines modern technology, real-time communication, and language learning to create a centralized, secure, and user-friendly experience.
 
 ### 🏗️ Architecture
 
@@ -16,7 +16,7 @@ The backend follows a modular architecture with the following components:
 
 - **API Layer**: RESTful APIs for client communication
 - **WebSocket Layer**: Real-time communication for chat and notifications
-- **Blockchain Layer**: Smart contract interaction and transaction handling
+- **Reward System**: Centralized point-based reward management
 - **Database Layer**: MongoDB for data persistence
 - **Authentication Layer**: JWT-based user authentication
 - **Translation Service**: Multi-language translation capabilities
@@ -28,20 +28,17 @@ CultureBridge-Backend/
 ├── src/
 │   ├── controllers/          # Request handlers
 │   ├── models/              # Database models
+│   │   └── UserReward.js    # User reward system model
 │   ├── routes/              # API routes
+│   │   └── rewards.js       # Reward system routes
 │   ├── services/            # Business logic
-│   │   ├── blockchainService.js
+│   │   ├── rewardService.js # Reward management service
 │   │   ├── chatServer.js
 │   │   ├── contentService.js
 │   │   └── translationService.js
 │   ├── middleware/          # Custom middleware
 │   ├── utils/               # Utility functions
-│   └── app.js              # Express app configuration
-├── blockchain/              # Smart contracts
-│   ├── contracts/
-│   │   └── CultureBridgeToken.sol
-│   └── scripts/
-│       └── deploy.js
+│   └── enhancedApp.js       # Express app configuration
 ├── tests/                   # Test files
 ├── docs/                    # API documentation
 └── package.json
@@ -86,11 +83,6 @@ MONGODB_URI=mongodb://localhost:27017/culturebridge
 # Authentication
 JWT_SECRET=your_super_secret_jwt_key
 JWT_EXPIRE=7d
-
-# Blockchain
-BLOCKCHAIN_RPC_URL=https://bsc-dataseed.binance.org/
-PRIVATE_KEY=your_private_key
-CONTRACT_ADDRESS=0x...
 
 # Translation Service
 GOOGLE_TRANSLATE_API_KEY=your_google_translate_key
@@ -151,6 +143,58 @@ Authenticate user and get access token.
 }
 ```
 
+#### Reward System Endpoints
+
+##### GET /api/rewards/user
+Get current user's reward information.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "points": {
+      "learning": 1250,
+      "engagement": 800,
+      "contribution": 500,
+      "total": 2550
+    },
+    "level": {
+      "current": 5,
+      "experience": 2550,
+      "nextLevelExp": 3000
+    },
+    "achievements": ["first_lesson", "daily_streak_7"],
+    "checkInData": {
+      "streak": 7,
+      "lastCheckIn": "2024-01-15",
+      "totalCheckIns": 45
+    }
+  }
+}
+```
+
+##### POST /api/rewards/checkin
+Perform daily check-in.
+
+##### POST /api/rewards/points
+Add points to user account.
+
+**Request Body:**
+```json
+{
+  "type": "learning",
+  "amount": 50,
+  "reason": "Completed lesson"
+}
+```
+
+##### GET /api/rewards/shop
+Get available rewards in the shop.
+
+##### GET /api/rewards/leaderboard
+Get user leaderboard.
+
 #### User Endpoints
 
 ##### GET /api/users/profile
@@ -160,7 +204,7 @@ Get current user profile (requires authentication).
 Update user profile.
 
 ##### GET /api/users/stats
-Get user statistics (learning progress, CBT balance, etc.).
+Get user statistics (learning progress, points balance, etc.).
 
 #### Chat Endpoints
 
@@ -175,17 +219,6 @@ Get messages from a specific chat room.
 
 ##### POST /api/chat/translate
 Translate a message to target language.
-
-#### Blockchain Endpoints
-
-##### GET /api/blockchain/balance/:address
-Get CBT token balance for an address.
-
-##### POST /api/blockchain/transfer
-Transfer CBT tokens between addresses.
-
-##### GET /api/blockchain/transactions/:address
-Get transaction history for an address.
 
 #### Learning Endpoints
 
@@ -220,7 +253,7 @@ const socket = io('http://localhost:5000');
 
 #### Notification Events
 - `notification`: Receive real-time notifications
-- `cbt_earned`: CBT tokens earned notification
+- `points_earned`: Points earned notification
 
 ### 🧪 Testing
 
@@ -246,7 +279,7 @@ tests/
 ├── integration/             # Integration tests
 │   ├── auth.test.js
 │   ├── chat.test.js
-│   └── blockchain.test.js
+│   └── rewards.test.js
 └── fixtures/               # Test data
 ```
 
@@ -304,7 +337,7 @@ pm2 monit
 
 ### 🚀 CultureBridge 后端服务器
 
-这是CultureBridge的后端服务器，一个结合区块链技术、实时通信和语言学习的革命性文化交流平台。
+这是CultureBridge的后端服务器，一个结合现代技术、实时通信和语言学习的革命性文化交流平台，提供中心化、安全且用户友好的体验。
 
 ### 🏗️ 架构
 
@@ -312,7 +345,7 @@ pm2 monit
 
 - **API层**: 客户端通信的RESTful API
 - **WebSocket层**: 聊天和通知的实时通信
-- **区块链层**: 智能合约交互和交易处理
+- **奖励系统**: 中心化的基于积分的奖励管理
 - **数据库层**: MongoDB数据持久化
 - **认证层**: 基于JWT的用户认证
 - **翻译服务**: 多语言翻译功能
@@ -324,20 +357,17 @@ CultureBridge-Backend/
 ├── src/
 │   ├── controllers/          # 请求处理器
 │   ├── models/              # 数据库模型
+│   │   └── UserReward.js    # 用户奖励系统模型
 │   ├── routes/              # API路由
+│   │   └── rewards.js       # 奖励系统路由
 │   ├── services/            # 业务逻辑
-│   │   ├── blockchainService.js
+│   │   ├── rewardService.js # 奖励管理服务
 │   │   ├── chatServer.js
 │   │   ├── contentService.js
 │   │   └── translationService.js
 │   ├── middleware/          # 自定义中间件
 │   ├── utils/               # 工具函数
-│   └── app.js              # Express应用配置
-├── blockchain/              # 智能合约
-│   ├── contracts/
-│   │   └── CultureBridgeToken.sol
-│   └── scripts/
-│       └── deploy.js
+│   └── enhancedApp.js       # Express应用配置
 ├── tests/                   # 测试文件
 ├── docs/                    # API文档
 └── package.json
@@ -369,6 +399,23 @@ mongod
 # 运行服务器
 npm run dev
 ```
+
+### 🎁 奖励系统
+
+#### 积分类型
+- **学习积分**: 通过完成课程和练习获得
+- **互动积分**: 通过社区参与和聊天获得
+- **贡献积分**: 通过帮助他人和创建内容获得
+
+#### 等级系统
+- 基于总积分的用户等级
+- 每个等级解锁新的特权和奖励
+- 经验值系统跟踪进度
+
+#### 成就系统
+- 多样化的成就徽章
+- 特殊里程碑奖励
+- 社区认可系统
 
 ### 🧪 测试
 

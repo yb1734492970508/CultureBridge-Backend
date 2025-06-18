@@ -40,6 +40,7 @@ const culturalExchangeRoutes = require("./routes/culturalExchange");
 const languageLearningRoutes = require("./routes/languageLearning");
 const translationRoutes = require("./routes/translation");
 const rewardRoutes = require("./routes/rewards");
+const userRoutes = require("./routes/users");
 
 // 导入服务
 const EnhancedSocketService = require("./services/enhancedSocketService");
@@ -145,6 +146,7 @@ app.use("/api/cultural-exchange", culturalExchangeRoutes);
 app.use("/api/language-learning", languageLearningRoutes);
 app.use("/api/translation", translationRoutes);
 app.use("/api/rewards", rewardRoutes);
+app.use("/api/users", userRoutes);
 
 // 根路径
 app.get('/', (req, res) => {

@@ -1,6 +1,3 @@
-const { Web3 } = require('web3');
-const jwt = require('jsonwebtoken');
-
 class UserService {
     constructor() {
         this.users = new Map(); // 内存存储，生产环境应使用数据库
@@ -8,25 +5,24 @@ class UserService {
     }
     
     /**
-     * 验证钱包签名
+     * 验证用户凭证（例如：用户名/密码）
      */
-    async verifyWalletSignature(walletAddress, signature, message) {
-        try {
-            const web3 = new Web3();
-            const recoveredAddress = web3.eth.accounts.recover(message, signature);
-            return recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
-        } catch (error) {
-            console.error('签名验证失败:', error);
-            return false;
+    async verifyUserCredentials(username, password) {
+        // 模拟用户验证，生产环境应查询数据库
+        for (const [id, user] of this.users) {
+            if (user.username === username && user.password === password) {
+                return { id, ...user };
+            }
         }
+        return null;
     }
     
     /**
-     * 根据钱包地址获取用户
+     * 根据用户名获取用户
      */
-    async getUserByWallet(walletAddress) {
+    async getUserByUsername(username) {
         for (const [id, user] of this.users) {
-            if (user.walletAddress.toLowerCase() === walletAddress.toLowerCase()) {
+            if (user.username === username) {
                 return { id, ...user };
             }
         }
@@ -116,19 +112,19 @@ class UserService {
     /**
      * 计算用户等级
      */
-    calculateUserLevel(cbtBalance) {
-        if (cbtBalance >= 10000) return 'Diamond';
-        if (cbtBalance >= 2000) return 'Platinum';
-        if (cbtBalance >= 500) return 'Gold';
-        if (cbtBalance >= 100) return 'Silver';
+    calculateUserLevel(totalPoints) {
+        if (totalPoints >= 10000) return 'Diamond';
+        if (totalPoints >= 2000) return 'Platinum';
+        if (totalPoints >= 500) return 'Gold';
+        if (totalPoints >= 100) return 'Silver';
         return 'Bronze';
     }
     
     /**
      * 获取排行榜
      */
-    async getLeaderboard(type = 'cbt', limit = 50) {
-        // 模拟排行榜数据
+    async getLeaderboard(type = 'totalPoints', limit = 50) {
+        // 模拟排行榜数据，生产环境应从UserReward模型获取
         const leaderboard = [];
         let rank = 1;
         
@@ -140,17 +136,15 @@ class UserService {
                 rank,
                 userId,
                 username: user.username,
-                walletAddress: user.walletAddress,
-                cbtBalance: Math.random() * 10000, // 模拟余额
-                totalEarned: stats.totalEarned,
-                level: this.calculateUserLevel(Math.random() * 10000)
+                totalPoints: stats.totalEarned, // 假设totalEarned代表总积分
+                level: this.calculateUserLevel(stats.totalEarned)
             });
             rank++;
         }
         
         // 根据类型排序
-        if (type === 'cbt') {
-            leaderboard.sort((a, b) => b.cbtBalance - a.cbtBalance);
+        if (type === 'totalPoints') {
+            leaderboard.sort((a, b) => b.totalPoints - a.totalPoints);
         } else if (type === 'earned') {
             leaderboard.sort((a, b) => b.totalEarned - a.totalEarned);
         }

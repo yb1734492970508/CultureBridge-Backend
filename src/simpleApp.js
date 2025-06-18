@@ -43,12 +43,8 @@ app.use("/api/communities", require("./routes/communities"));
 app.use("/api/messages", require("./routes/messages"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/voice", require("./routes/voice"));
-app.use("/api/tokens", require("./routes/tokens"));
 app.use("/api/cultural-exchange", require("./routes/culturalExchange"));
 app.use("/api/language-learning", require("./routes/languageLearning"));
-
-// 增强版API路由
-app.use("/api/blockchain", require("./routes/blockchain"));
 app.use("/api/translation", require("./routes/translation"));
 
 // 静态文件服务

@@ -1,237 +1,154 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 
-const UserSchema = new mongoose.Schema({
+const userSchema = new mongoose.Schema({
+  // 基本信息
   username: {
     type: String,
-    required: [true, '请提供用户名'],
+    required: true,
     unique: true,
     trim: true,
-    maxlength: [50, '用户名不能超过50个字符']
+    minlength: 3,
+    maxlength: 30
   },
   email: {
     type: String,
-    required: [true, '请提供邮箱'],
+    required: true,
     unique: true,
-    match: [
-      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-      '请提供有效的邮箱'
-    ]
+    lowercase: true,
+    trim: true
   },
   password: {
     type: String,
-    required: [true, '请提供密码'],
-    minlength: [6, '密码至少6个字符'],
-    select: false
+    required: true,
+    minlength: 6
   },
-  role: {
+  avatar: {
     type: String,
-    enum: ['user', 'admin', 'moderator'],
-    default: 'user'
-  },
-  status: {
-    type: String,
-    enum: ['active', 'disabled', 'pending'],
-    default: 'active'
+    default: '/api/placeholder/40/40'
   },
   
-  // 区块链相关字段
-  walletAddress: {
-    type: String,
-    unique: true,
-    sparse: true,
-    match: [/^0x[a-fA-F0-9]{40}$/, '请提供有效的钱包地址']
-  },
-  
-  // 用户资料信息
+  // 个人资料
   profile: {
-    firstName: {
-      type: String,
-      maxlength: [50, '名字不能超过50个字符']
-    },
-    lastName: {
-      type: String,
-      maxlength: [50, '姓氏不能超过50个字符']
-    },
-    avatar: {
-      type: String,
-      default: ''
-    },
+    firstName: String,
+    lastName: String,
     bio: {
       type: String,
-      maxlength: [500, '个人简介不能超过500个字符']
+      maxlength: 500
     },
-    location: {
-      type: String,
-      maxlength: [100, '位置不能超过100个字符']
-    },
-    website: {
-      type: String,
-      maxlength: [200, '网站链接不能超过200个字符']
-    },
-    dateOfBirth: {
-      type: Date
-    },
+    location: String,
+    birthday: Date,
     gender: {
       type: String,
-      enum: ['male', 'female', 'other', 'prefer_not_to_say'],
-      default: 'prefer_not_to_say'
-    }
-  },
-  
-  // 语言相关
-  languages: {
-    native: [{
-      code: {
+      enum: ['male', 'female', 'other', 'prefer_not_to_say']
+    },
+    languages: [{
+      language: String,
+      level: {
         type: String,
-        required: true
-      },
-      name: {
-        type: String,
-        required: true
-      },
-      proficiency: {
-        type: String,
-        enum: ['native', 'fluent', 'intermediate', 'beginner'],
-        default: 'native'
+        enum: ['beginner', 'intermediate', 'advanced', 'native']
       }
     }],
-    learning: [{
-      code: {
-        type: String,
-        required: true
-      },
-      name: {
-        type: String,
-        required: true
-      },
-      proficiency: {
-        type: String,
-        enum: ['fluent', 'intermediate', 'beginner'],
-        required: true
+    interests: [String],
+    timezone: String
+  },
+  
+  // 学习数据
+  learning: {
+    currentCourses: [{
+      courseId: String,
+      courseName: String,
+      progress: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
       },
       startDate: {
         type: Date,
         default: Date.now
-      }
-    }]
-  },
-  
-  // CBT代币相关
-  tokenStats: {
-    totalEarned: {
+      },
+      lastAccessed: Date
+    }],
+    completedCourses: [{
+      courseId: String,
+      courseName: String,
+      completionDate: Date,
+      finalScore: Number
+    }],
+    studyStreak: {
+      current: {
+        type: Number,
+        default: 0
+      },
+      longest: {
+        type: Number,
+        default: 0
+      },
+      lastStudyDate: Date
+    },
+    totalStudyTime: {
       type: Number,
-      default: 0
-    },
-    totalSpent: {
-      type: Number,
-      default: 0
-    },
-    currentBalance: {
-      type: Number,
-      default: 0
-    },
-    level: {
-      type: String,
-      enum: ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'DIAMOND'],
-      default: 'BRONZE'
-    },
-    lastRewardTime: {
-      type: Date
-    },
-    dailyRewardClaimed: {
-      type: Date
+      default: 0 // 分钟
     }
   },
   
-  // 活动统计
-  activityStats: {
-    messagesCount: {
-      type: Number,
-      default: 0
-    },
-    translationsCount: {
-      type: Number,
-      default: 0
-    },
-    voiceMessagesCount: {
-      type: Number,
-      default: 0
-    },
-    contentCreatedCount: {
-      type: Number,
-      default: 0
-    },
-    loginStreak: {
-      type: Number,
-      default: 0
-    },
-    lastLoginDate: {
-      type: Date
-    },
-    totalLoginDays: {
-      type: Number,
-      default: 0
-    }
-  },
-  
-  // 社交功能
+  // 社交数据
   social: {
-    followers: [{
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    }],
-    following: [{
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    }],
     friends: [{
-      user: {
-        type: mongoose.Schema.ObjectId,
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+      },
+      friendshipDate: {
+        type: Date,
+        default: Date.now
       },
       status: {
         type: String,
         enum: ['pending', 'accepted', 'blocked'],
         default: 'pending'
-      },
-      createdAt: {
-        type: Date,
-        default: Date.now
       }
+    }],
+    followers: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    following: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    blockedUsers: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
     }]
   },
   
-  // 设置和偏好
+  // 活动统计
+  stats: {
+    totalLogins: {
+      type: Number,
+      default: 0
+    },
+    messagesCount: {
+      type: Number,
+      default: 0
+    },
+    postsCount: {
+      type: Number,
+      default: 0
+    },
+    helpfulVotes: {
+      type: Number,
+      default: 0
+    },
+    lastActive: {
+      type: Date,
+      default: Date.now
+    }
+  },
+  
+  // 设置
   settings: {
-    language: {
-      type: String,
-      default: 'zh-CN'
-    },
-    theme: {
-      type: String,
-      enum: ['light', 'dark', 'auto'],
-      default: 'auto'
-    },
-    notifications: {
-      email: {
-        type: Boolean,
-        default: true
-      },
-      push: {
-        type: Boolean,
-        default: true
-      },
-      rewards: {
-        type: Boolean,
-        default: true
-      },
-      messages: {
-        type: Boolean,
-        default: true
-      }
-    },
     privacy: {
       profileVisibility: {
         type: String,
@@ -242,261 +159,158 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
-      allowDirectMessages: {
+      allowMessages: {
+        type: String,
+        enum: ['everyone', 'friends', 'none'],
+        default: 'everyone'
+      }
+    },
+    notifications: {
+      email: {
         type: Boolean,
         default: true
+      },
+      push: {
+        type: Boolean,
+        default: true
+      },
+      messages: {
+        type: Boolean,
+        default: true
+      },
+      achievements: {
+        type: Boolean,
+        default: true
+      },
+      marketing: {
+        type: Boolean,
+        default: false
       }
+    },
+    preferences: {
+      language: {
+        type: String,
+        default: 'zh-CN'
+      },
+      theme: {
+        type: String,
+        enum: ['light', 'dark', 'auto'],
+        default: 'auto'
+      },
+      timezone: String
     }
   },
   
-  // 验证相关
-  verification: {
-    email: {
-      verified: {
-        type: Boolean,
-        default: false
-      },
-      token: String,
-      expires: Date
-    },
-    phone: {
-      verified: {
-        type: Boolean,
-        default: false
-      },
-      number: String,
-      token: String,
-      expires: Date
-    },
-    identity: {
-      verified: {
-        type: Boolean,
-        default: false
-      },
-      documents: [String],
-      verifiedAt: Date
-    }
+  // 系统字段
+  status: {
+    type: String,
+    enum: ['active', 'inactive', 'suspended', 'deleted'],
+    default: 'active'
   },
-  
-  // 安全相关
-  security: {
-    twoFactorEnabled: {
-      type: Boolean,
-      default: false
-    },
-    twoFactorSecret: {
-      type: String,
-      select: false
-    },
-    loginAttempts: {
-      type: Number,
-      default: 0
-    },
-    lockUntil: Date,
-    passwordResetToken: String,
-    passwordResetExpires: Date,
-    lastPasswordChange: {
-      type: Date,
-      default: Date.now
-    }
+  emailVerified: {
+    type: Boolean,
+    default: false
   },
-  
-  // 时间戳
-  createdAt: {
-    type: Date,
-    default: Date.now
+  emailVerificationToken: String,
+  passwordResetToken: String,
+  passwordResetExpires: Date,
+  lastLogin: Date,
+  loginAttempts: {
+    type: Number,
+    default: 0
   },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  },
-  lastActiveAt: {
-    type: Date,
-    default: Date.now
-  }
+  lockUntil: Date
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// 虚拟字段：全名
-UserSchema.virtual('fullName').get(function() {
+// 虚拟字段
+userSchema.virtual('fullName').get(function() {
   if (this.profile.firstName && this.profile.lastName) {
     return `${this.profile.firstName} ${this.profile.lastName}`;
   }
   return this.username;
 });
 
-// 虚拟字段：账户锁定状态
-UserSchema.virtual('isLocked').get(function() {
-  return !!(this.security.lockUntil && this.security.lockUntil > Date.now());
+userSchema.virtual('isLocked').get(function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
 // 索引
-UserSchema.index({ email: 1 });
-UserSchema.index({ username: 1 });
-UserSchema.index({ walletAddress: 1 });
-UserSchema.index({ 'tokenStats.level': 1 });
-UserSchema.index({ createdAt: -1 });
-UserSchema.index({ lastActiveAt: -1 });
+userSchema.index({ username: 1 });
+userSchema.index({ email: 1 });
+userSchema.index({ 'stats.lastActive': -1 });
+userSchema.index({ status: 1 });
+userSchema.index({ createdAt: -1 });
 
-// 密码加密中间件
-UserSchema.pre('save', async function(next) {
-  // 只有密码被修改时才加密
-  if (!this.isModified('password')) {
-    next();
-  }
-  
-  // 加密密码
-  const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_ROUNDS) || 12);
-  this.password = await bcrypt.hash(this.password, salt);
-  
-  // 更新密码修改时间
-  this.security.lastPasswordChange = new Date();
-  
-  next();
-});
-
-// 更新时间戳中间件
-UserSchema.pre('save', function(next) {
-  this.updatedAt = new Date();
-  next();
-});
-
-// 密码验证方法
-UserSchema.methods.matchPassword = async function(enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+// 实例方法
+userSchema.methods.toSafeObject = function() {
+  const user = this.toObject();
+  delete user.password;
+  delete user.emailVerificationToken;
+  delete user.passwordResetToken;
+  delete user.passwordResetExpires;
+  delete user.loginAttempts;
+  delete user.lockUntil;
+  return user;
 };
 
-// 生成JWT Token
-UserSchema.methods.getSignedJwtToken = function() {
-  return jwt.sign(
-    { 
-      id: this._id,
-      username: this.username,
-      role: this.role,
-      walletAddress: this.walletAddress
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: process.env.JWT_EXPIRE || '30d'
-    }
-  );
+userSchema.methods.updateLastActive = function() {
+  this.stats.lastActive = new Date();
+  return this.save();
 };
 
-// 生成密码重置Token
-UserSchema.methods.getResetPasswordToken = function() {
-  // 生成token
-  const resetToken = require('crypto').randomBytes(20).toString('hex');
-  
-  // 哈希token并设置到字段
-  this.security.passwordResetToken = require('crypto')
-    .createHash('sha256')
-    .update(resetToken)
-    .digest('hex');
-  
-  // 设置过期时间（10分钟）
-  this.security.passwordResetExpires = Date.now() + 10 * 60 * 1000;
-  
-  return resetToken;
-};
-
-// 增加登录尝试次数
-UserSchema.methods.incLoginAttempts = function() {
-  // 如果之前有锁定且已过期，重置尝试次数
-  if (this.security.lockUntil && this.security.lockUntil < Date.now()) {
+userSchema.methods.incrementLoginAttempts = function() {
+  // 如果之前有锁定且已过期，重置
+  if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
-      $unset: {
-        'security.lockUntil': 1
-      },
-      $set: {
-        'security.loginAttempts': 1
-      }
+      $unset: { lockUntil: 1 },
+      $set: { loginAttempts: 1 }
     });
   }
   
-  const updates = { $inc: { 'security.loginAttempts': 1 } };
+  const updates = { $inc: { loginAttempts: 1 } };
   
-  // 如果达到最大尝试次数且未锁定，则锁定账户
-  const maxAttempts = 5;
-  const lockTime = 2 * 60 * 60 * 1000; // 2小时
-  
-  if (this.security.loginAttempts + 1 >= maxAttempts && !this.isLocked) {
-    updates.$set = { 'security.lockUntil': Date.now() + lockTime };
+  // 如果达到最大尝试次数且当前未锁定，则锁定账户
+  if (this.loginAttempts + 1 >= 5 && !this.isLocked) {
+    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 }; // 锁定2小时
   }
   
   return this.updateOne(updates);
 };
 
-// 重置登录尝试次数
-UserSchema.methods.resetLoginAttempts = function() {
+userSchema.methods.resetLoginAttempts = function() {
   return this.updateOne({
-    $unset: {
-      'security.loginAttempts': 1,
-      'security.lockUntil': 1
-    }
+    $unset: { loginAttempts: 1, lockUntil: 1 }
   });
 };
 
-// 更新活动时间
-UserSchema.methods.updateActivity = function() {
-  this.lastActiveAt = new Date();
-  return this.save();
+// 静态方法
+userSchema.statics.findByEmail = function(email) {
+  return this.findOne({ email: email.toLowerCase() });
 };
 
-// 更新代币统计
-UserSchema.methods.updateTokenStats = function(earned = 0, spent = 0) {
-  this.tokenStats.totalEarned += earned;
-  this.tokenStats.totalSpent += spent;
-  this.tokenStats.currentBalance = this.tokenStats.totalEarned - this.tokenStats.totalSpent;
-  
-  // 更新用户等级
-  const balance = this.tokenStats.currentBalance;
-  if (balance >= 10000) {
-    this.tokenStats.level = 'DIAMOND';
-  } else if (balance >= 2000) {
-    this.tokenStats.level = 'PLATINUM';
-  } else if (balance >= 500) {
-    this.tokenStats.level = 'GOLD';
-  } else if (balance >= 100) {
-    this.tokenStats.level = 'SILVER';
-  } else {
-    this.tokenStats.level = 'BRONZE';
+userSchema.statics.findActiveUsers = function() {
+  return this.find({ status: 'active' });
+};
+
+userSchema.statics.getOnlineUsers = function() {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  return this.find({
+    'stats.lastActive': { $gte: fiveMinutesAgo },
+    status: 'active'
+  });
+};
+
+// 中间件
+userSchema.pre('save', function(next) {
+  if (this.isModified('email')) {
+    this.email = this.email.toLowerCase();
   }
-  
-  return this.save();
-};
+  next();
+});
 
-// 更新活动统计
-UserSchema.methods.updateActivityStats = function(type, count = 1) {
-  const validTypes = ['messagesCount', 'translationsCount', 'voiceMessagesCount', 'contentCreatedCount'];
-  
-  if (validTypes.includes(type)) {
-    this.activityStats[type] += count;
-  }
-  
-  return this.save();
-};
-
-// 检查每日登录奖励
-UserSchema.methods.canClaimDailyReward = function() {
-  if (!this.tokenStats.dailyRewardClaimed) {
-    return true;
-  }
-  
-  const today = new Date();
-  const lastClaim = new Date(this.tokenStats.dailyRewardClaimed);
-  
-  // 检查是否是不同的日期
-  return today.toDateString() !== lastClaim.toDateString();
-};
-
-// 标记每日奖励已领取
-UserSchema.methods.markDailyRewardClaimed = function() {
-  this.tokenStats.dailyRewardClaimed = new Date();
-  return this.save();
-};
-
-module.exports = mongoose.model('User', UserSchema);
+module.exports = mongoose.model('User', userSchema);
 
