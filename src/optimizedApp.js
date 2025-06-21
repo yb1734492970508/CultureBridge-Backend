@@ -1,424 +1,796 @@
-const cluster = require('cluster');
-const os = require('os');
-const express = require('express');
-const compression = require('compression');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
-const hpp = require('hpp');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const http = require('http');
-
-// 性能监控
-const performanceMonitor = require('./middleware/performanceMonitor');
-const memoryMonitor = require('./middleware/memoryMonitor');
-const healthCheck = require('./middleware/healthCheck');
-
-// 数据库连接优化
-const connectDB = require('./config/optimizedDb');
-const redisClient = require('./config/redis');
-
-// 中间件
-const errorHandler = require('./middleware/error');
-const advancedResults = require('./middleware/advancedResults');
-const { securityMiddleware } = require('./middleware/security');
-
-// 导入模型
-const User = require('./models/User');
-const Profile = require('./models/Profile');
-const Topic = require('./models/Topic');
-const Post = require('./models/Post');
-const Comment = require('./models/Comment');
-const Resource = require('./models/Resource');
-const Event = require('./models/Event');
-const Community = require('./models/Community');
-const Message = require('./models/Message');
-const ChatRoom = require('./models/ChatRoom');
-const ChatMessage = require('./models/ChatMessage');
-
-// 导入路由文件
-const auth = require('./routes/auth');
-const profiles = require('./routes/profiles');
-const topics = require('./routes/topics');
-const posts = require('./routes/posts');
-const comments = require('./routes/comments');
-const resources = require('./routes/resources');
-const events = require('./routes/events');
-const communities = require('./routes/communities');
-const messages = require('./routes/messages');
-
-// 导入优化的路由文件
-const optimizedBlockchain = require('./routes/optimizedBlockchain');
-const optimizedChat = require('./routes/optimizedChat');
-const optimizedVoice = require('./routes/optimizedVoice');
-const tokens = require('./routes/tokens');
-
-// 导入优化的服务
-const OptimizedSocketService = require('./services/optimizedSocketService');
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const http = require("http");
+const path = require("path");
+const mongoose = require("mongoose");
+const helmet = require("helmet");
+const compression = require("compression");
+const rateLimit = require("express-rate-limit");
 
 // 加载环境变量
 dotenv.config();
 
-// 集群模式支持
-if (cluster.isMaster && process.env.NODE_ENV === 'production') {
-    const numCPUs = os.cpus().length;
-    console.log(`🚀 Master process ${process.pid} is running`);
-    console.log(`🔄 Forking ${numCPUs} workers...`);
-    
-    // Fork workers
-    for (let i = 0; i < numCPUs; i++) {
-        cluster.fork();
-    }
-    
-    cluster.on('exit', (worker, code, signal) => {
-        console.log(`💀 Worker ${worker.process.pid} died`);
-        console.log('🔄 Starting a new worker...');
-        cluster.fork();
-    });
-} else {
-    startServer();
-}
+// 创建Express应用
+const app = express();
 
-async function startServer() {
-    try {
-        // 连接数据库
-        await connectDB();
-        
-        // 初始化Redis
-        await redisClient.connect();
-        
-        // 初始化Express应用
-        const app = express();
-        
-        // 创建HTTP服务器
-        const server = http.createServer(app);
-        
-        // 初始化优化的Socket.IO服务
-        const socketService = new OptimizedSocketService(server);
-        
-        // 性能监控中间件
-        app.use(performanceMonitor);
-        app.use(memoryMonitor);
-        
-        // 安全中间件
-        app.use(helmet({
-            contentSecurityPolicy: {
-                directives: {
-                    defaultSrc: ["'self'"],
-                    styleSrc: ["'self'", "'unsafe-inline'"],
-                    scriptSrc: ["'self'"],
-                    imgSrc: ["'self'", "data:", "https:"],
-                    connectSrc: ["'self'", "wss:", "ws:"],
-                    fontSrc: ["'self'"],
-                    objectSrc: ["'none'"],
-                    mediaSrc: ["'self'"],
-                    frameSrc: ["'none'"],
-                }
-            },
-            crossOriginEmbedderPolicy: false
-        }));
-        
-        // 压缩中间件
-        app.use(compression({
-            level: 6,
-            threshold: 1024,
-            filter: (req, res) => {
-                if (req.headers['x-no-compression']) {
-                    return false;
-                }
-                return compression.filter(req, res);
-            }
-        }));
-        
-        // 速率限制
-        const limiter = rateLimit({
-            windowMs: 15 * 60 * 1000, // 15分钟
-            max: process.env.NODE_ENV === 'production' ? 100 : 1000, // 限制每个IP的请求数
-            message: {
-                error: 'Too many requests from this IP, please try again later.',
-                message: '请求过于频繁，请稍后再试'
-            },
-            standardHeaders: true,
-            legacyHeaders: false,
-            skip: (req) => {
-                // 跳过健康检查和静态资源
-                return req.path === '/health' || req.path.startsWith('/uploads');
-            }
-        });
-        app.use('/api/', limiter);
-        
-        // 基础中间件
-        app.use(express.json({ 
-            limit: '10mb',
-            verify: (req, res, buf) => {
-                req.rawBody = buf;
-            }
-        }));
-        app.use(express.urlencoded({ 
-            extended: true, 
-            limit: '10mb' 
-        }));
-        
-        // CORS配置
-        app.use(cors({
-            origin: process.env.NODE_ENV === 'production' 
-                ? ['https://culturebridge.app', 'https://www.culturebridge.app']
-                : "*",
-            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-            credentials: true,
-            maxAge: 86400 // 24小时
-        }));
-        
-        // 数据清理中间件
-        app.use(mongoSanitize());
-        app.use(xss());
-        app.use(hpp({
-            whitelist: ['sort', 'fields', 'page', 'limit', 'language', 'category']
-        }));
-        
-        // 应用安全中间件
-        securityMiddleware(app);
-        
-        // 设置静态文件夹（带缓存）
-        app.use('/uploads', express.static('uploads', {
-            maxAge: '1d',
-            etag: true,
-            lastModified: true
-        }));
-        app.use('/audio', express.static('uploads/audio', {
-            maxAge: '1h',
-            etag: true,
-            lastModified: true
-        }));
-        
-        // 健康检查端点
-        app.use('/health', healthCheck);
-        
-        // 主页路由
-        app.get('/', (req, res) => {
-            res.json({
-                message: 'CultureBridge API v2.1 运行中... / CultureBridge API v2.1 Running...',
-                version: '2.1.0',
-                status: 'optimized',
-                features: [
-                    'BNB链区块链集成 / BNB Chain Blockchain Integration',
-                    'CBT代币系统 / CBT Token System',
-                    '增强实时聊天 / Enhanced Real-time Chat',
-                    '智能语音翻译 / Intelligent Voice Translation',
-                    '文化交流奖励 / Cultural Exchange Rewards',
-                    '跨语言沟通 / Cross-language Communication',
-                    '实时语音识别 / Real-time Speech Recognition',
-                    '文化内容检测 / Cultural Content Detection',
-                    '性能优化 / Performance Optimization',
-                    '集群支持 / Cluster Support'
-                ],
-                blockchain: {
-                    network: process.env.NODE_ENV === 'production' ? 'BSC Mainnet' : 'BSC Testnet',
-                    chainId: process.env.NODE_ENV === 'production' ? 56 : 97,
-                    token: 'CBT (CultureBridge Token)'
-                },
-                performance: {
-                    cluster: cluster.isWorker ? `Worker ${process.pid}` : 'Single Process',
-                    memory: process.memoryUsage(),
-                    uptime: process.uptime()
-                },
-                endpoints: {
-                    auth: '/api/v1/auth',
-                    blockchain: '/api/v1/blockchain',
-                    chat: '/api/v1/chat',
-                    voice: '/api/v1/voice',
-                    tokens: '/api/v1/tokens',
-                    profiles: '/api/v1/profiles',
-                    topics: '/api/v1/topics',
-                    posts: '/api/v1/posts',
-                    comments: '/api/v1/comments',
-                    resources: '/api/v1/resources',
-                    events: '/api/v1/events',
-                    communities: '/api/v1/communities',
-                    messages: '/api/v1/messages'
-                },
-                websocket: {
-                    endpoint: '/socket.io',
-                    events: [
-                        'authenticate',
-                        'chat:join',
-                        'chat:leave',
-                        'chat:message',
-                        'chat:voice',
-                        'translate:request',
-                        'culture:suggest',
-                        'reward:earned'
-                    ]
-                }
-            });
-        });
-        
-        // API信息端点
-        app.get('/api', (req, res) => {
-            res.json({
-                name: 'CultureBridge API',
-                version: '2.1.0',
-                description: '基于区块链的跨文化交流平台API / Blockchain-based Cross-cultural Communication Platform API',
-                documentation: '/api/docs',
-                performance: {
-                    optimized: true,
-                    cluster: cluster.isWorker,
-                    compression: true,
-                    caching: true,
-                    rateLimit: true
-                },
-                features: {
-                    blockchain: {
-                        description: 'BNB链集成，CBT代币奖励系统 / BNB Chain Integration, CBT Token Reward System',
-                        endpoints: [
-                            'GET /api/v1/blockchain/balance/:address',
-                            'GET /api/v1/blockchain/transactions/:address',
-                            'POST /api/v1/blockchain/award',
-                            'POST /api/v1/blockchain/transfer'
-                        ]
-                    },
-                    chat: {
-                        description: '增强实时聊天系统，支持文化交流奖励 / Enhanced Real-time Chat System with Cultural Exchange Rewards',
-                        endpoints: [
-                            'GET /api/v1/chat/rooms',
-                            'POST /api/v1/chat/rooms',
-                            'GET /api/v1/chat/rooms/:id/messages',
-                            'POST /api/v1/chat/rooms/:id/messages'
-                        ]
-                    },
-                    voice: {
-                        description: '智能语音翻译，支持多语言实时转换 / Intelligent Voice Translation with Multi-language Real-time Conversion',
-                        endpoints: [
-                            'POST /api/v1/voice/transcribe',
-                            'POST /api/v1/voice/translate',
-                            'POST /api/v1/voice/synthesize',
-                            'POST /api/v1/voice/translate-audio'
-                        ]
-                    }
-                }
-            });
-        });
-        
-        // 挂载路由
-        app.use('/api/v1/auth', auth);
-        app.use('/api/v1/blockchain', optimizedBlockchain);
-        app.use('/api/v1/chat', optimizedChat);
-        app.use('/api/v1/voice', optimizedVoice);
-        app.use('/api/v1/tokens', tokens);
-        app.use('/api/v1/profiles', advancedResults(Profile, { path: 'user', select: 'username email' }), profiles);
-        app.use('/api/v1/topics', advancedResults(Topic, { path: 'user', select: 'username' }), topics);
-        app.use('/api/v1/posts', advancedResults(Post, [
-            { path: 'user', select: 'username' },
-            { path: 'topic', select: 'title category' }
-        ]), posts);
-        app.use('/api/v1/topics/:topicId/posts', posts);
-        app.use('/api/v1/comments', advancedResults(Comment, [
-            { path: 'user', select: 'username' },
-            { path: 'post', select: 'title' }
-        ]), comments);
-        app.use('/api/v1/posts/:postId/comments', comments);
-        app.use('/api/v1/resources', advancedResults(Resource, { path: 'user', select: 'username' }), resources);
-        app.use('/api/v1/events', advancedResults(Event, { path: 'organizer', select: 'username' }), events);
-        app.use('/api/v1/communities', advancedResults(Community, { path: 'creator', select: 'username' }), communities);
-        app.use('/api/v1/messages', messages);
-        
-        // 404处理
-        app.use('*', (req, res) => {
-            res.status(404).json({
-                success: false,
-                message: '接口不存在 / Endpoint not found',
-                availableEndpoints: [
-                    '/api/v1/auth',
-                    '/api/v1/blockchain',
-                    '/api/v1/chat',
-                    '/api/v1/voice',
-                    '/api/v1/tokens'
-                ]
-            });
-        });
-        
-        // 错误处理中间件
-        app.use(errorHandler);
-        
-        // 启动服务器
-        const PORT = process.env.PORT || 5000;
-        server.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 CultureBridge v2.1 服务器运行在端口 ${PORT} (Worker ${process.pid})`);
-            console.log(`📱 优化Socket.IO服务已启动`);
-            console.log(`🔗 BNB链区块链服务已集成`);
-            console.log(`🎤 智能语音翻译服务已启用`);
-            console.log(`💬 文化交流聊天服务已启用`);
-            console.log(`🪙 CBT代币奖励系统已激活`);
-            console.log(`🌍 跨文化交流平台已就绪`);
-            console.log(`📊 性能监控已开始`);
-            console.log(`⚡ 性能优化已启用`);
-            console.log(`🔒 安全防护已加强`);
-        });
-        
-        // 优雅关闭
-        const gracefulShutdown = async (signal) => {
-            console.log(`收到${signal}信号，正在优雅关闭...`);
-            
-            // 停止接受新连接
-            server.close(async () => {
-                console.log('HTTP服务器已关闭');
-                
-                try {
-                    // 关闭Socket服务
-                    if (socketService) {
-                        await socketService.close();
-                        console.log('Socket.IO服务已关闭');
-                    }
-                    
-                    // 关闭Redis连接
-                    if (redisClient) {
-                        await redisClient.quit();
-                        console.log('Redis连接已关闭');
-                    }
-                    
-                    // 关闭数据库连接
-                    const mongoose = require('mongoose');
-                    await mongoose.connection.close();
-                    console.log('数据库连接已关闭');
-                    
-                    console.log('优雅关闭完成');
-                    process.exit(0);
-                } catch (error) {
-                    console.error('关闭过程中发生错误:', error);
-                    process.exit(1);
-                }
-            });
-            
-            // 强制关闭超时
-            setTimeout(() => {
-                console.error('强制关闭超时，立即退出');
-                process.exit(1);
-            }, 30000);
-        };
-        
-        // 处理未捕获的异常
-        process.on('unhandledRejection', (err, promise) => {
-            console.log(`错误: ${err.message}`);
-            gracefulShutdown('unhandledRejection');
-        });
-        
-        process.on('uncaughtException', (err) => {
-            console.log(`未捕获的异常: ${err.message}`);
-            gracefulShutdown('uncaughtException');
-        });
-        
-        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-        
-        // 导出应用实例
-        module.exports = { app, server, socketService };
-        
-    } catch (error) {
-        console.error('服务器启动失败:', error);
-        process.exit(1);
+// 全局错误处理
+process.on("unhandledRejection", (err, promise) => {
+  console.log("❌ 未处理的Promise拒绝:", err.message);
+  console.log("🔄 服务器已关闭，正在退出进程...");
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  console.log("❌ 未捕获的异常:", err.message);
+  console.log("🔄 服务器已关闭，正在退出进程...");
+  process.exit(1);
+});
+
+// 数据库连接
+const connectDB = async () => {
+  try {
+    const mongoUri = 'mongodb+srv://Culturebridge:Yibin199058@culturebridge.qrfsxrk.mongodb.net/?retryWrites=true&w=majority&appName=Culturebridge';
+    
+    const conn = await mongoose.connect(mongoUri, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    console.log(`📊 Database: ${conn.connection.name}`);
+  } catch (error) {
+    console.error(`❌ MongoDB Connection Error: ${error.message}`);
+    process.exit(1);
+  }
+};
+
+// 连接数据库
+connectDB();
+
+// 安全中间件
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
+// 压缩中间件
+app.use(compression());
+
+// CORS配置 - 允许所有来源
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// 速率限制
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分钟
+  max: 1000, // 每个IP最多1000个请求
+  message: {
+    error: "请求过于频繁，请稍后再试"
+  }
+});
+app.use(limiter);
+
+// 解析JSON和URL编码数据
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// 静态文件服务
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// 健康检查端点
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'CultureBridge API is running',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0'
+  });
+});
+
+// API状态端点
+app.get('/api/status', (req, res) => {
+  res.status(200).json({
+    status: 'active',
+    service: 'CultureBridge API',
+    version: '2.0.0',
+    features: [
+      'Real-time Translation',
+      'Cultural Exchange',
+      'Voice Chat',
+      'Community Features',
+      'Language Learning',
+      'Blockchain Integration'
+    ],
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 用户模型
+const userSchema = new mongoose.Schema({
+  username: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+    minlength: 3,
+    maxlength: 30
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true
+  },
+  password: {
+    type: String,
+    required: true,
+    minlength: 6
+  },
+  profile: {
+    firstName: String,
+    lastName: String,
+    avatar: String,
+    bio: String,
+    location: String,
+    languages: [String],
+    interests: [String],
+    culturalBackground: String
+  },
+  preferences: {
+    language: {
+      type: String,
+      default: 'zh'
+    },
+    notifications: {
+      email: { type: Boolean, default: true },
+      push: { type: Boolean, default: true }
+    },
+    privacy: {
+      profileVisibility: { type: String, default: 'public' },
+      showLocation: { type: Boolean, default: true }
     }
-}
+  },
+  stats: {
+    points: { type: Number, default: 0 },
+    level: { type: Number, default: 1 },
+    connectionsCount: { type: Number, default: 0 },
+    postsCount: { type: Number, default: 0 }
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  lastLogin: Date,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// 消息模型
+const messageSchema = new mongoose.Schema({
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  receiver: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true
+  },
+  originalLanguage: String,
+  translatedContent: String,
+  targetLanguage: String,
+  messageType: {
+    type: String,
+    enum: ['text', 'voice', 'image', 'file'],
+    default: 'text'
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const Message = mongoose.model('Message', messageSchema);
+
+// 文化交流帖子模型
+const postSchema = new mongoose.Schema({
+  author: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  title: {
+    type: String,
+    required: true,
+    maxlength: 200
+  },
+  content: {
+    type: String,
+    required: true
+  },
+  category: {
+    type: String,
+    enum: ['culture', 'language', 'travel', 'food', 'tradition', 'festival', 'lifestyle', 'education'],
+    required: true
+  },
+  tags: [String],
+  images: [String],
+  likes: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  comments: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    content: String,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  views: {
+    type: Number,
+    default: 0
+  },
+  isPublished: {
+    type: Boolean,
+    default: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const Post = mongoose.model('Post', postSchema);
+
+// 认证路由
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, email, password, profile } = req.body;
+
+    // 检查用户是否已存在
+    const existingUser = await User.findOne({
+      $or: [{ email }, { username }]
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: '用户名或邮箱已存在'
+      });
+    }
+
+    // 创建新用户
+    const user = new User({
+      username,
+      email,
+      password, // 在实际应用中应该加密
+      profile: profile || {}
+    });
+
+    await user.save();
+
+    res.status(201).json({
+      success: true,
+      message: '注册成功',
+      data: {
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          profile: user.profile
+        }
+      }
+    });
+  } catch (error) {
+    console.error('注册错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // 查找用户
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: '邮箱或密码错误'
+      });
+    }
+
+    // 在实际应用中应该验证密码哈希
+    if (user.password !== password) {
+      return res.status(401).json({
+        success: false,
+        message: '邮箱或密码错误'
+      });
+    }
+
+    // 更新最后登录时间
+    user.lastLogin = new Date();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '登录成功',
+      data: {
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          profile: user.profile,
+          preferences: user.preferences,
+          stats: user.stats
+        },
+        token: 'mock-jwt-token' // 在实际应用中应该生成真实的JWT
+      }
+    });
+  } catch (error) {
+    console.error('登录错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 用户路由
+app.get('/api/users/profile/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { user }
+    });
+  } catch (error) {
+    console.error('获取用户资料错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+app.put('/api/users/profile/:id', async (req, res) => {
+  try {
+    const { profile, preferences } = req.body;
+    
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          profile: { ...profile },
+          preferences: { ...preferences },
+          updatedAt: new Date()
+        }
+      },
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '资料更新成功',
+      data: { user }
+    });
+  } catch (error) {
+    console.error('更新用户资料错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 消息路由
+app.get('/api/messages/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    const messages = await Message.find({
+      $or: [
+        { sender: userId },
+        { receiver: userId }
+      ]
+    })
+    .populate('sender', 'username profile.avatar')
+    .populate('receiver', 'username profile.avatar')
+    .sort({ createdAt: -1 })
+    .limit(limit * 1)
+    .skip((page - 1) * limit);
+
+    res.json({
+      success: true,
+      data: { messages }
+    });
+  } catch (error) {
+    console.error('获取消息错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+app.post('/api/messages', async (req, res) => {
+  try {
+    const { sender, receiver, content, messageType = 'text' } = req.body;
+
+    const message = new Message({
+      sender,
+      receiver,
+      content,
+      messageType
+    });
+
+    await message.save();
+    await message.populate('sender', 'username profile.avatar');
+    await message.populate('receiver', 'username profile.avatar');
+
+    res.status(201).json({
+      success: true,
+      message: '消息发送成功',
+      data: { message }
+    });
+  } catch (error) {
+    console.error('发送消息错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 翻译路由
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { text, targetLanguage, sourceLanguage = 'auto' } = req.body;
+
+    // 模拟翻译功能（在实际应用中应该集成真实的翻译API）
+    const translations = {
+      'zh': {
+        'Hello': '你好',
+        'How are you?': '你好吗？',
+        'Thank you': '谢谢',
+        'Good morning': '早上好',
+        'Good evening': '晚上好'
+      },
+      'en': {
+        '你好': 'Hello',
+        '你好吗？': 'How are you?',
+        '谢谢': 'Thank you',
+        '早上好': 'Good morning',
+        '晚上好': 'Good evening'
+      }
+    };
+
+    const translatedText = translations[targetLanguage]?.[text] || `[翻译] ${text}`;
+
+    res.json({
+      success: true,
+      data: {
+        originalText: text,
+        translatedText,
+        sourceLanguage,
+        targetLanguage,
+        confidence: 0.95
+      }
+    });
+  } catch (error) {
+    console.error('翻译错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '翻译服务暂时不可用'
+    });
+  }
+});
+
+// 文化交流帖子路由
+app.get('/api/posts', async (req, res) => {
+  try {
+    const { page = 1, limit = 10, category, search } = req.query;
+    
+    let query = { isPublished: true };
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { content: { $regex: search, $options: 'i' } },
+        { tags: { $in: [new RegExp(search, 'i')] } }
+      ];
+    }
+
+    const posts = await Post.find(query)
+      .populate('author', 'username profile.avatar profile.location')
+      .populate('comments.user', 'username profile.avatar')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Post.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        posts,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('获取帖子错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+app.post('/api/posts', async (req, res) => {
+  try {
+    const { title, content, category, tags, author } = req.body;
+
+    const post = new Post({
+      title,
+      content,
+      category,
+      tags: tags || [],
+      author
+    });
+
+    await post.save();
+    await post.populate('author', 'username profile.avatar profile.location');
+
+    res.status(201).json({
+      success: true,
+      message: '帖子发布成功',
+      data: { post }
+    });
+  } catch (error) {
+    console.error('发布帖子错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+app.get('/api/posts/:id', async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id)
+      .populate('author', 'username profile.avatar profile.location')
+      .populate('comments.user', 'username profile.avatar');
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: '帖子不存在'
+      });
+    }
+
+    // 增加浏览量
+    post.views += 1;
+    await post.save();
+
+    res.json({
+      success: true,
+      data: { post }
+    });
+  } catch (error) {
+    console.error('获取帖子详情错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 点赞帖子
+app.post('/api/posts/:id/like', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const post = await Post.findById(req.params.id);
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: '帖子不存在'
+      });
+    }
+
+    const existingLike = post.likes.find(like => like.user.toString() === userId);
+    
+    if (existingLike) {
+      // 取消点赞
+      post.likes = post.likes.filter(like => like.user.toString() !== userId);
+    } else {
+      // 添加点赞
+      post.likes.push({ user: userId });
+    }
+
+    await post.save();
+
+    res.json({
+      success: true,
+      message: existingLike ? '取消点赞成功' : '点赞成功',
+      data: {
+        likesCount: post.likes.length,
+        isLiked: !existingLike
+      }
+    });
+  } catch (error) {
+    console.error('点赞错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 添加评论
+app.post('/api/posts/:id/comments', async (req, res) => {
+  try {
+    const { userId, content } = req.body;
+    const post = await Post.findById(req.params.id);
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: '帖子不存在'
+      });
+    }
+
+    post.comments.push({
+      user: userId,
+      content
+    });
+
+    await post.save();
+    await post.populate('comments.user', 'username profile.avatar');
+
+    res.status(201).json({
+      success: true,
+      message: '评论添加成功',
+      data: {
+        comment: post.comments[post.comments.length - 1]
+      }
+    });
+  } catch (error) {
+    console.error('添加评论错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 获取统计数据
+app.get('/api/stats', async (req, res) => {
+  try {
+    const userCount = await User.countDocuments({ isActive: true });
+    const postCount = await Post.countDocuments({ isPublished: true });
+    const messageCount = await Message.countDocuments();
+
+    res.json({
+      success: true,
+      data: {
+        users: userCount,
+        posts: postCount,
+        messages: messageCount,
+        languages: 50,
+        countries: 150
+      }
+    });
+  } catch (error) {
+    console.error('获取统计数据错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '服务器错误'
+    });
+  }
+});
+
+// 错误处理中间件
+app.use((err, req, res, next) => {
+  console.error('服务器错误:', err);
+  res.status(500).json({
+    success: false,
+    message: '服务器内部错误'
+  });
+});
+
+// 404处理
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: '接口不存在'
+  });
+});
+
+// 启动服务器
+const PORT = process.env.PORT || 5000;
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 CultureBridge API Server running on port ${PORT}`);
+  console.log(`🌐 Server URL: http://localhost:${PORT}`);
+  console.log(`📚 API Documentation: http://localhost:${PORT}/api/status`);
+});
+
+// 优雅关闭
+process.on('SIGTERM', () => {
+  console.log('🔄 收到SIGTERM信号，正在优雅关闭服务器...');
+  server.close(() => {
+    console.log('✅ 服务器已关闭');
+    mongoose.connection.close(false, () => {
+      console.log('✅ MongoDB连接已关闭');
+      process.exit(0);
+    });
+  });
+});
+
+module.exports = app;
 
