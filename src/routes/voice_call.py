@@ -1,260 +1,391 @@
+"""
+CultureBridge Backend Routes - Voice Call
+跨国语音通话API路由
+"""
+
 from flask import Blueprint, request, jsonify
-from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
-import uuid
-import random
-import requests
-import time
+from flask_jwt_extended import jwt_required, get_jwt_identity
+import base64
+import json
 from datetime import datetime
 
-voice_call_bp = Blueprint('voice_call', __name__)
+from ..services.voice_call import voice_call_service
+from ..database import db, VoiceCallSession, UserMatchingPreference
 
-# 存储在线用户和匹配队列
-online_users = {}
-matching_queue = []
-active_calls = {}
+voice_call_bp = Blueprint('voice_call', __name__, url_prefix='/api/voice-call')
 
-def get_user_country(ip_address):
-    """根据IP地址获取用户所在国家"""
+@voice_call_bp.route('/matching/join', methods=['POST'])
+@jwt_required()
+def join_matching_queue():
+    """加入匹配队列"""
+    
     try:
-        # 使用免费的IP地理位置API
-        response = requests.get(f'http://ip-api.com/json/{ip_address}')
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('country', 'Unknown'), data.get('countryCode', 'XX')
-    except:
-        pass
-    return 'Unknown', 'XX'
-
-def find_match_for_user(user_id, user_info):
-    """为用户寻找匹配的通话对象"""
-    user_country = user_info.get('country_code', 'XX')
-    
-    # 寻找不同国家的用户
-    potential_matches = []
-    for queued_user_id in matching_queue:
-        if queued_user_id != user_id and queued_user_id in online_users:
-            queued_user = online_users[queued_user_id]
-            if queued_user.get('country_code', 'XX') != user_country:
-                potential_matches.append(queued_user_id)
-    
-    # 如果没有不同国家的用户，则匹配任何可用用户
-    if not potential_matches:
-        potential_matches = [uid for uid in matching_queue if uid != user_id]
-    
-    if potential_matches:
-        return random.choice(potential_matches)
-    
-    return None
-
-@voice_call_bp.route('/api/voice-call/join', methods=['POST'])
-def join_voice_call():
-    """用户加入语音通话系统"""
-    data = request.get_json()
-    user_id = data.get('user_id', str(uuid.uuid4()))
-    user_name = data.get('user_name', f'User_{user_id[:8]}')
-    
-    # 获取用户IP和地理位置
-    user_ip = request.remote_addr
-    country, country_code = get_user_country(user_ip)
-    
-    # 存储用户信息
-    user_info = {
-        'user_id': user_id,
-        'user_name': user_name,
-        'country': country,
-        'country_code': country_code,
-        'joined_at': datetime.now().isoformat(),
-        'status': 'online'
-    }
-    
-    online_users[user_id] = user_info
-    
-    return jsonify({
-        'success': True,
-        'user_id': user_id,
-        'user_info': user_info,
-        'message': f'欢迎来自{country}的{user_name}！'
-    })
-
-@voice_call_bp.route('/api/voice-call/find-match', methods=['POST'])
-def find_match():
-    """寻找语音通话匹配"""
-    data = request.get_json()
-    user_id = data.get('user_id')
-    
-    if user_id not in online_users:
-        return jsonify({'success': False, 'message': '用户未找到'})
-    
-    user_info = online_users[user_id]
-    
-    # 将用户加入匹配队列
-    if user_id not in matching_queue:
-        matching_queue.append(user_id)
-    
-    # 寻找匹配
-    matched_user_id = find_match_for_user(user_id, user_info)
-    
-    if matched_user_id:
-        # 创建通话房间
-        call_id = str(uuid.uuid4())
-        call_info = {
-            'call_id': call_id,
-            'user1': user_id,
-            'user2': matched_user_id,
-            'user1_info': user_info,
-            'user2_info': online_users[matched_user_id],
-            'created_at': datetime.now().isoformat(),
-            'status': 'connecting'
-        }
+        user_id = get_jwt_identity()
+        data = request.get_json()
         
-        active_calls[call_id] = call_info
+        # 验证必需参数
+        if not data.get('user_language'):
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters',
+                'message': 'user_language is required'
+            }), 400
         
-        # 从匹配队列中移除两个用户
-        if user_id in matching_queue:
-            matching_queue.remove(user_id)
-        if matched_user_id in matching_queue:
-            matching_queue.remove(matched_user_id)
+        # 获取参数
+        user_language = data['user_language']
+        target_languages = data.get('target_languages', [])
+        preferences = data.get('preferences', {})
+        
+        # 加入匹配队列（同步调用）
+        result = voice_call_service.join_matching_queue_sync(
+            user_id=user_id,
+            user_language=user_language,
+            target_languages=target_languages,
+            preferences=preferences
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to join matching queue'
+        }), 500
+
+@voice_call_bp.route('/matching/leave', methods=['POST'])
+@jwt_required()
+def leave_matching_queue():
+    """离开匹配队列"""
+    
+    try:
+        user_id = get_jwt_identity()
+        
+        # 离开匹配队列（同步调用）
+        result = voice_call_service.leave_matching_queue_sync(user_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to leave matching queue'
+        }), 500
+
+@voice_call_bp.route('/matching/status', methods=['GET'])
+@jwt_required()
+def get_matching_status():
+    """获取匹配状态"""
+    
+    try:
+        user_id = get_jwt_identity()
+        
+        # 获取队列状态
+        queue_status = voice_call_service.get_queue_status()
+        
+        # 检查用户是否在队列中
+        waiting_users = voice_call_service.waiting_users
+        user_in_queue = user_id in waiting_users
+        
+        # 检查用户是否在通话中
+        user_in_call = False
+        current_call = None
+        
+        for call_id, call_info in voice_call_service.active_calls.items():
+            if user_id in [call_info['caller_id'], call_info['callee_id']]:
+                user_in_call = True
+                current_call = {
+                    'call_session_id': call_id,
+                    'status': call_info['status'],
+                    'participants': call_info['participants']
+                }
+                break
         
         return jsonify({
             'success': True,
-            'matched': True,
-            'call_info': call_info,
-            'partner_info': online_users[matched_user_id]
-        })
-    else:
+            'user_in_queue': user_in_queue,
+            'user_in_call': user_in_call,
+            'current_call': current_call,
+            'queue_status': queue_status,
+            'queue_position': list(waiting_users.keys()).index(user_id) + 1 if user_in_queue else 0
+        }), 200
+        
+    except Exception as e:
         return jsonify({
-            'success': True,
-            'matched': False,
-            'message': '正在寻找匹配用户...',
-            'queue_position': matching_queue.index(user_id) + 1 if user_id in matching_queue else 0
-        })
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get matching status'
+        }), 500
 
-@voice_call_bp.route('/api/voice-call/end-call', methods=['POST'])
-def end_call():
+@voice_call_bp.route('/call/<call_session_id>/audio', methods=['POST'])
+@jwt_required()
+def process_call_audio(call_session_id):
+    """处理通话音频"""
+    
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # 验证必需参数
+        if not data.get('audio_data'):
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters',
+                'message': 'audio_data is required'
+            }), 400
+        
+        # 解码音频数据
+        try:
+            audio_data = base64.b64decode(data['audio_data'])
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid audio data',
+                'message': 'Failed to decode base64 audio data'
+            }), 400
+        
+        # 处理音频（同步调用）
+        result = voice_call_service.process_call_audio_sync(
+            call_session_id=call_session_id,
+            user_id=user_id,
+            audio_data=audio_data,
+            chunk_index=data.get('chunk_index', 0)
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to process call audio'
+        }), 500
+
+@voice_call_bp.route('/call/<call_session_id>/end', methods=['POST'])
+@jwt_required()
+def end_voice_call(call_session_id):
     """结束语音通话"""
-    data = request.get_json()
-    call_id = data.get('call_id')
-    user_id = data.get('user_id')
     
-    if call_id in active_calls:
-        call_info = active_calls[call_id]
-        call_info['status'] = 'ended'
-        call_info['ended_at'] = datetime.now().isoformat()
+    try:
+        user_id = get_jwt_identity()
         
-        # 可以在这里记录通话统计信息
-        del active_calls[call_id]
+        # 结束通话（同步调用）
+        result = voice_call_service.end_voice_call_sync(call_session_id, user_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to end voice call'
+        }), 500
+
+@voice_call_bp.route('/call/<call_session_id>/status', methods=['GET'])
+@jwt_required()
+def get_call_status(call_session_id):
+    """获取通话状态"""
+    
+    try:
+        user_id = get_jwt_identity()
+        
+        # 获取通话状态（同步调用）
+        result = voice_call_service.get_call_status_sync(call_session_id, user_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get call status'
+        }), 500
+
+@voice_call_bp.route('/history', methods=['GET'])
+@jwt_required()
+def get_call_history():
+    """获取通话历史"""
+    
+    try:
+        user_id = get_jwt_identity()
+        
+        # 获取查询参数
+        limit = request.args.get('limit', 20, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # 获取通话历史（同步调用）
+        history = voice_call_service.get_user_call_history_sync(
+            user_id=user_id,
+            limit=limit,
+            offset=offset
+        )
         
         return jsonify({
             'success': True,
-            'message': '通话已结束'
-        })
+            'history': history,
+            'total_calls': len(history),
+            'limit': limit,
+            'offset': offset
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get call history'
+        }), 500
+
+@voice_call_bp.route('/preferences', methods=['GET'])
+@jwt_required()
+def get_user_preferences():
+    """获取用户匹配偏好"""
     
-    return jsonify({'success': False, 'message': '通话未找到'})
-
-@voice_call_bp.route('/api/voice-call/stats', methods=['GET'])
-def get_stats():
-    """获取语音通话统计信息"""
-    return jsonify({
-        'online_users': len(online_users),
-        'users_in_queue': len(matching_queue),
-        'active_calls': len(active_calls),
-        'countries_online': len(set(user.get('country_code', 'XX') for user in online_users.values()))
-    })
-
-@voice_call_bp.route('/api/voice-call/countries', methods=['GET'])
-def get_online_countries():
-    """获取在线用户的国家分布"""
-    countries = {}
-    for user in online_users.values():
-        country = user.get('country', 'Unknown')
-        country_code = user.get('country_code', 'XX')
-        if country_code not in countries:
-            countries[country_code] = {
-                'name': country,
-                'code': country_code,
-                'users': 0
+    try:
+        user_id = get_jwt_identity()
+        
+        # 查询用户偏好（模拟实现）
+        return jsonify({
+            'success': True,
+            'preferences': {
+                'preferred_languages': [],
+                'age_range': {'min': 18, 'max': 65},
+                'interests': [],
+                'availability_hours': {},
+                'match_criteria': {}
             }
-        countries[country_code]['users'] += 1
-    
-    return jsonify({
-        'countries': list(countries.values()),
-        'total_countries': len(countries)
-    })
+        }), 200
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get user preferences'
+        }), 500
 
-# WebSocket事件处理
-def init_voice_call_socketio(socketio):
-    """初始化语音通话的WebSocket事件"""
+@voice_call_bp.route('/preferences', methods=['POST'])
+@jwt_required()
+def update_user_preferences():
+    """更新用户匹配偏好"""
     
-    @socketio.on('join_voice_room')
-    def on_join_voice_room(data):
-        """用户加入语音房间"""
-        call_id = data.get('call_id')
-        user_id = data.get('user_id')
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
         
-        if call_id in active_calls:
-            join_room(call_id)
-            emit('user_joined_voice_room', {
-                'user_id': user_id,
-                'call_id': call_id
-            }, room=call_id)
+        # 更新偏好设置（同步调用）
+        result = voice_call_service.update_user_preferences_sync(
+            user_id=user_id,
+            preferences=data
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to update user preferences'
+        }), 500
+
+@voice_call_bp.route('/stats', methods=['GET'])
+@jwt_required()
+def get_call_stats():
+    """获取通话统计"""
     
-    @socketio.on('voice_offer')
-    def on_voice_offer(data):
-        """处理WebRTC offer"""
-        call_id = data.get('call_id')
-        offer = data.get('offer')
-        sender_id = data.get('sender_id')
+    try:
+        user_id = get_jwt_identity()
         
-        emit('voice_offer', {
-            'offer': offer,
-            'sender_id': sender_id
-        }, room=call_id, include_self=False)
+        # 返回模拟统计数据
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total_calls': 0,
+                'completed_calls': 0,
+                'total_duration': 0,
+                'total_translations': 0,
+                'average_call_duration': 0,
+                'average_translations_per_call': 0
+            },
+            'recent_calls': []
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get call stats'
+        }), 500
+
+@voice_call_bp.route('/queue/status', methods=['GET'])
+def get_queue_status():
+    """获取队列状态（公开接口）"""
     
-    @socketio.on('voice_answer')
-    def on_voice_answer(data):
-        """处理WebRTC answer"""
-        call_id = data.get('call_id')
-        answer = data.get('answer')
-        sender_id = data.get('sender_id')
+    try:
+        queue_status = voice_call_service.get_queue_status()
         
-        emit('voice_answer', {
-            'answer': answer,
-            'sender_id': sender_id
-        }, room=call_id, include_self=False)
+        return jsonify({
+            'success': True,
+            'queue_status': queue_status
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get queue status'
+        }), 500
+
+@voice_call_bp.route('/languages', methods=['GET'])
+def get_supported_languages():
+    """获取支持的语言列表"""
     
-    @socketio.on('voice_ice_candidate')
-    def on_voice_ice_candidate(data):
-        """处理ICE候选"""
-        call_id = data.get('call_id')
-        candidate = data.get('candidate')
-        sender_id = data.get('sender_id')
+    try:
+        # 返回常用语言列表
+        languages = [
+            {'code': 'zh', 'name': 'Chinese', 'native_name': '中文', 'flag': '🇨🇳'},
+            {'code': 'en', 'name': 'English', 'native_name': 'English', 'flag': '🇺🇸'},
+            {'code': 'es', 'name': 'Spanish', 'native_name': 'Español', 'flag': '🇪🇸'},
+            {'code': 'fr', 'name': 'French', 'native_name': 'Français', 'flag': '🇫🇷'},
+            {'code': 'de', 'name': 'German', 'native_name': 'Deutsch', 'flag': '🇩🇪'},
+            {'code': 'ja', 'name': 'Japanese', 'native_name': '日本語', 'flag': '🇯🇵'},
+            {'code': 'ko', 'name': 'Korean', 'native_name': '한국어', 'flag': '🇰🇷'},
+            {'code': 'ar', 'name': 'Arabic', 'native_name': 'العربية', 'flag': '🇸🇦'},
+            {'code': 'ru', 'name': 'Russian', 'native_name': 'Русский', 'flag': '🇷🇺'},
+            {'code': 'pt', 'name': 'Portuguese', 'native_name': 'Português', 'flag': '🇵🇹'},
+            {'code': 'it', 'name': 'Italian', 'native_name': 'Italiano', 'flag': '🇮🇹'},
+            {'code': 'hi', 'name': 'Hindi', 'native_name': 'हिन्दी', 'flag': '🇮🇳'},
+            {'code': 'th', 'name': 'Thai', 'native_name': 'ไทย', 'flag': '🇹🇭'},
+            {'code': 'vi', 'name': 'Vietnamese', 'native_name': 'Tiếng Việt', 'flag': '🇻🇳'}
+        ]
         
-        emit('voice_ice_candidate', {
-            'candidate': candidate,
-            'sender_id': sender_id
-        }, room=call_id, include_self=False)
-    
-    @socketio.on('leave_voice_room')
-    def on_leave_voice_room(data):
-        """用户离开语音房间"""
-        call_id = data.get('call_id')
-        user_id = data.get('user_id')
+        return jsonify({
+            'success': True,
+            'languages': languages,
+            'total_languages': len(languages)
+        }), 200
         
-        leave_room(call_id)
-        emit('user_left_voice_room', {
-            'user_id': user_id,
-            'call_id': call_id
-        }, room=call_id)
-        
-        # 结束通话
-        if call_id in active_calls:
-            active_calls[call_id]['status'] = 'ended'
-            active_calls[call_id]['ended_at'] = datetime.now().isoformat()
-    
-    @socketio.on('disconnect')
-    def on_disconnect():
-        """用户断开连接"""
-        # 清理用户数据
-        # 注意：这里需要根据session或其他方式识别用户
-        pass
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to get supported languages'
+        }), 500
 

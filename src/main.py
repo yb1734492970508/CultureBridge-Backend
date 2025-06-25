@@ -25,6 +25,8 @@ from routes.chat import chat_bp
 from routes.learning import learning_bp
 from routes.community import community_bp
 from routes.content import content_bp
+from routes.realtime import realtime_bp
+from routes.voice_call import voice_call_bp
 
 def create_app():
     """创建Flask应用"""
@@ -61,6 +63,8 @@ def create_app():
     app.register_blueprint(learning_bp)
     app.register_blueprint(community_bp)
     app.register_blueprint(content_bp)
+    app.register_blueprint(realtime_bp)
+    app.register_blueprint(voice_call_bp)
     
     # 注册蓝图 - 新的商业化功能
     app.register_blueprint(subscription_bp)
