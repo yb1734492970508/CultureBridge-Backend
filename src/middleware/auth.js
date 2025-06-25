@@ -79,5 +79,48 @@ const auth = async (req, res, next) => {
   }
 };
 
-module.exports = auth;
+// 保护路由的中间件
+const protect = auth;
+
+// 可选认证中间件
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.header('Authorization');
+    
+    if (!authHeader) {
+      req.user = null;
+      return next();
+    }
+
+    const token = authHeader.startsWith('Bearer ') 
+      ? authHeader.slice(7) 
+      : authHeader;
+
+    if (!token) {
+      req.user = null;
+      return next();
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    const user = await User.findById(decoded.userId).select('-password');
+    
+    if (user && user.status === 'active') {
+      req.user = {
+        userId: user._id,
+        username: user.username,
+        email: user.email
+      };
+      user.updateLastActive();
+    } else {
+      req.user = null;
+    }
+
+    next();
+  } catch (error) {
+    req.user = null;
+    next();
+  }
+};
+
+module.exports = { auth, protect, optionalAuth };
 

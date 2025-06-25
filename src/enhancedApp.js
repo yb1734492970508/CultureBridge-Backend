@@ -164,6 +164,7 @@ app.use("/api/community-enhanced", communityEnhancedRoutes);
 app.use("/api/recommendations", personalizedRecommendationRoutes);
 app.use("/api/professional", professionalServiceRoutes);
 
+
 // 根路径
 app.get('/', (req, res) => {
   res.json({
@@ -209,6 +210,11 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 if (process.env.NODE_ENV !== "test") {
+  // 初始化直播Socket服务
+  const LiveStreamSocketHandler = require("./socket/liveStreamSocket");
+  const liveStreamSocket = new LiveStreamSocketHandler(server);
+  console.log("✅ 直播Socket服务已初始化");
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`
 🚀 CultureBridge服务器已启动 v3.0
@@ -216,6 +222,7 @@ if (process.env.NODE_ENV !== "test") {
 🌍 环境: ${process.env.NODE_ENV || 'development'}
 🔗 API地址: http://localhost:${PORT}
 📚 API文档: http://localhost:${PORT}/api/docs
+🎥 直播功能: 已启用
 🤖 新功能: AI内容助手、增强社区、个性化推荐、专业服务
 💖 让世界因文化交流而更加美好！
     `);
