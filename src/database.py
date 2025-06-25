@@ -1,249 +1,404 @@
 """
-CultureBridge Backend Database Models
-数据库模型定义
+CultureBridge Backend Database Configuration - Enhanced with MongoDB and Points System
+增强的数据库配置，支持MongoDB和积分系统
 """
 
-from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Text, Float, Integer, Boolean, JSON, create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 import os
+from datetime import datetime
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+import logging
 
-# 创建基类
-Base = declarative_base()
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 数据库配置
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///culturebridge.db')
-
-# 创建数据库引擎
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 数据库会话
-class DatabaseSession:
+class DatabaseConfig:
+    """数据库配置类"""
+    
     def __init__(self):
-        self.session = SessionLocal()
+        # MongoDB配置
+        self.mongodb_uri = os.getenv(
+            'MONGODB_URI', 
+            'mongodb+srv://Culturebridge:Yibin199058@culturebridge.qrfsxrk.mongodb.net/?retryWrites=true&w=majority&appName=Culturebridge'
+        )
+        self.database_name = os.getenv('DATABASE_NAME', 'culturebridge')
+        
+        # 连接配置
+        self.connection_timeout = 10000  # 10秒
+        self.server_selection_timeout = 5000  # 5秒
+        
+        # 初始化连接
+        self.client = None
+        self.db = None
+        self.connect()
     
-    def add(self, obj):
-        self.session.add(obj)
+    def connect(self):
+        """连接到MongoDB"""
+        try:
+            self.client = MongoClient(
+                self.mongodb_uri,
+                serverSelectionTimeoutMS=self.server_selection_timeout,
+                connectTimeoutMS=self.connection_timeout,
+                retryWrites=True,
+                w='majority'
+            )
+            
+            # 测试连接
+            self.client.admin.command('ping')
+            self.db = self.client[self.database_name]
+            
+            logger.info(f"Successfully connected to MongoDB: {self.database_name}")
+            return True
+            
+        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+            logger.error(f"Failed to connect to MongoDB: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to MongoDB: {str(e)}")
+            return False
     
-    def commit(self):
-        self.session.commit()
+    def get_collection(self, collection_name):
+        """获取集合"""
+        if not self.db:
+            if not self.connect():
+                raise Exception("Database connection not available")
+        return self.db[collection_name]
     
     def close(self):
-        self.session.close()
+        """关闭连接"""
+        if self.client:
+            self.client.close()
+            logger.info("MongoDB connection closed")
 
-# 创建全局数据库实例
-db = DatabaseSession()
+# 全局数据库实例
+db_config = DatabaseConfig()
 
-# 用户模型
-class User(Base):
-    __tablename__ = 'users'
+class UserModel:
+    """用户模型"""
     
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), unique=True, nullable=False, index=True)
-    username = Column(String(100), nullable=False)
-    email = Column(String(255), unique=True, nullable=False)
-    native_language = Column(String(10), default='en')
-    total_translations = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    def __init__(self):
+        self.collection = db_config.get_collection('users')
+    
+    def create_user(self, user_data):
+        """创建用户"""
+        user_data.update({
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'total_points': 230,  # 默认积分
+            'available_points': 230,
+            'earned_today': 0,
+            'learning_level': 'Beginner',
+            'cultural_achievements': 0,
+            'subscription_type': 'free',
+            'is_active': True,
+            'is_verified': False,
+            'is_premium': False
+        })
+        
+        result = self.collection.insert_one(user_data)
+        return str(result.inserted_id)
+    
+    def get_user_by_id(self, user_id):
+        """根据ID获取用户"""
+        return self.collection.find_one({'_id': user_id})
+    
+    def get_user_by_email(self, email):
+        """根据邮箱获取用户"""
+        return self.collection.find_one({'email': email})
+    
+    def update_user(self, user_id, update_data):
+        """更新用户信息"""
+        update_data['updated_at'] = datetime.utcnow()
+        return self.collection.update_one(
+            {'_id': user_id},
+            {'$set': update_data}
+        )
+    
+    def add_points(self, user_id, amount, reason=''):
+        """增加用户积分"""
+        return self.collection.update_one(
+            {'_id': user_id},
+            {
+                '$inc': {
+                    'total_points': amount,
+                    'available_points': amount,
+                    'earned_today': amount
+                },
+                '$set': {'updated_at': datetime.utcnow()}
+            }
+        )
+    
+    def spend_points(self, user_id, amount):
+        """消费用户积分"""
+        user = self.get_user_by_id(user_id)
+        if not user or user.get('available_points', 0) < amount:
+            return False
+        
+        return self.collection.update_one(
+            {'_id': user_id},
+            {
+                '$inc': {'available_points': -amount},
+                '$set': {'updated_at': datetime.utcnow()}
+            }
+        )
 
-# 语言模型
-class Language(Base):
-    __tablename__ = 'languages'
+class PointsTransactionModel:
+    """积分交易模型"""
     
-    id = Column(Integer, primary_key=True)
-    code = Column(String(10), unique=True, nullable=False)
-    name = Column(String(100), nullable=False)
-    native_name = Column(String(100), nullable=False)
-    flag_emoji = Column(String(10))
-    is_active = Column(Boolean, default=True)
-
-# 翻译记录模型
-class Translation(Base):
-    __tablename__ = 'translations'
+    def __init__(self):
+        self.collection = db_config.get_collection('points_transactions')
     
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), nullable=False, index=True)
-    source_text = Column(Text, nullable=False)
-    target_text = Column(Text, nullable=False)
-    source_language = Column(String(10), nullable=False)
-    target_language = Column(String(10), nullable=False)
-    translation_method = Column(String(50), default='auto')
-    confidence_score = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-# 实时翻译会话模型
-class RealtimeSession(Base):
-    __tablename__ = 'realtime_sessions'
+    def create_transaction(self, transaction_data):
+        """创建交易记录"""
+        transaction_data.update({
+            'created_at': datetime.utcnow(),
+            'date': datetime.utcnow().strftime('%b %d, %Y')
+        })
+        
+        result = self.collection.insert_one(transaction_data)
+        return str(result.inserted_id)
     
-    id = Column(Integer, primary_key=True)
-    session_id = Column(String(255), unique=True, nullable=False, index=True)
-    user_id = Column(String(255), nullable=False, index=True)
-    session_type = Column(String(50), nullable=False)
-    source_language = Column(String(10), nullable=False)
-    target_language = Column(String(10), nullable=False)
-    status = Column(String(20), default='active')
-    config = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    ended_at = Column(DateTime)
-    total_translations = Column(Integer, default=0)
-    total_audio_duration = Column(Float, default=0.0)
+    def get_user_transactions(self, user_id, limit=10, skip=0):
+        """获取用户交易记录"""
+        return list(self.collection.find(
+            {'user_id': user_id}
+        ).sort('created_at', -1).limit(limit).skip(skip))
     
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'session_id': self.session_id,
-            'user_id': self.user_id,
-            'session_type': self.session_type,
-            'source_language': self.source_language,
-            'target_language': self.target_language,
-            'status': self.status,
-            'config': self.config,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'ended_at': self.ended_at.isoformat() if self.ended_at else None,
-            'total_translations': self.total_translations,
-            'total_audio_duration': self.total_audio_duration
-        }
-
-# 实时翻译记录模型
-class RealtimeTranslation(Base):
-    __tablename__ = 'realtime_translations'
-    
-    id = Column(Integer, primary_key=True)
-    session_id = Column(String(255), nullable=False, index=True)
-    user_id = Column(String(255), nullable=False, index=True)
-    original_text = Column(Text, nullable=False)
-    translated_text = Column(Text, nullable=False)
-    source_language = Column(String(10), nullable=False)
-    target_language = Column(String(10), nullable=False)
-    confidence_score = Column(Float, default=0.0)
-    speech_confidence = Column(Float, default=0.0)
-    audio_duration = Column(Float, default=0.0)
-    processing_time = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'session_id': self.session_id,
-            'user_id': self.user_id,
-            'original_text': self.original_text,
-            'translated_text': self.translated_text,
-            'source_language': self.source_language,
-            'target_language': self.target_language,
-            'confidence_score': self.confidence_score,
-            'speech_confidence': self.speech_confidence,
-            'audio_duration': self.audio_duration,
-            'processing_time': self.processing_time,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
-
-# 语音通话会话模型
-class VoiceCallSession(Base):
-    __tablename__ = 'voice_call_sessions'
-    
-    id = Column(Integer, primary_key=True)
-    session_id = Column(String(255), unique=True, nullable=False, index=True)
-    caller_id = Column(String(255), nullable=False, index=True)
-    callee_id = Column(String(255), nullable=False, index=True)
-    caller_language = Column(String(10), nullable=False)
-    callee_language = Column(String(10), nullable=False)
-    status = Column(String(20), default='waiting')
-    call_type = Column(String(20), default='random')
-    started_at = Column(DateTime)
-    ended_at = Column(DateTime)
-    duration = Column(Integer, default=0)
-    total_translations = Column(Integer, default=0)
-    quality_rating = Column(Float)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'session_id': self.session_id,
-            'caller_id': self.caller_id,
-            'callee_id': self.callee_id,
-            'caller_language': self.caller_language,
-            'callee_language': self.callee_language,
-            'status': self.status,
-            'call_type': self.call_type,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'ended_at': self.ended_at.isoformat() if self.ended_at else None,
-            'duration': self.duration,
-            'total_translations': self.total_translations,
-            'quality_rating': self.quality_rating,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
-
-# 用户匹配偏好模型
-class UserMatchingPreference(Base):
-    __tablename__ = 'user_matching_preferences'
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), unique=True, nullable=False, index=True)
-    preferred_languages = Column(JSON)
-    age_range = Column(JSON)
-    interests = Column(JSON)
-    availability_hours = Column(JSON)
-    match_criteria = Column(JSON)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'preferred_languages': self.preferred_languages,
-            'age_range': self.age_range,
-            'interests': self.interests,
-            'availability_hours': self.availability_hours,
-            'match_criteria': self.match_criteria,
-            'is_active': self.is_active,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
-        }
-
-# 创建所有表
-def create_tables():
-    Base.metadata.create_all(bind=engine)
-
-# 初始化数据库
-def init_database():
-    create_tables()
-    
-    # 添加默认语言数据
-    session = SessionLocal()
-    
-    # 检查是否已有语言数据
-    if session.query(Language).count() == 0:
-        languages = [
-            Language(code='zh', name='Chinese', native_name='中文', flag_emoji='🇨🇳'),
-            Language(code='en', name='English', native_name='English', flag_emoji='🇺🇸'),
-            Language(code='es', name='Spanish', native_name='Español', flag_emoji='🇪🇸'),
-            Language(code='fr', name='French', native_name='Français', flag_emoji='🇫🇷'),
-            Language(code='de', name='German', native_name='Deutsch', flag_emoji='🇩🇪'),
-            Language(code='ja', name='Japanese', native_name='日本語', flag_emoji='🇯🇵'),
-            Language(code='ko', name='Korean', native_name='한국어', flag_emoji='🇰🇷'),
-            Language(code='ar', name='Arabic', native_name='العربية', flag_emoji='🇸🇦'),
-            Language(code='ru', name='Russian', native_name='Русский', flag_emoji='🇷🇺'),
-            Language(code='pt', name='Portuguese', native_name='Português', flag_emoji='🇵🇹'),
-            Language(code='it', name='Italian', native_name='Italiano', flag_emoji='🇮🇹'),
-            Language(code='hi', name='Hindi', native_name='हिन्दी', flag_emoji='🇮🇳'),
-            Language(code='th', name='Thai', native_name='ไทย', flag_emoji='🇹🇭'),
-            Language(code='vi', name='Vietnamese', native_name='Tiếng Việt', flag_emoji='🇻🇳')
+    def get_transaction_stats(self, user_id):
+        """获取用户交易统计"""
+        pipeline = [
+            {'$match': {'user_id': user_id}},
+            {'$group': {
+                '_id': None,
+                'total_earned': {
+                    '$sum': {
+                        '$cond': [{'$gt': ['$amount', 0]}, '$amount', 0]
+                    }
+                },
+                'total_spent': {
+                    '$sum': {
+                        '$cond': [{'$lt': ['$amount', 0]}, {'$abs': '$amount'}, 0]
+                    }
+                },
+                'transaction_count': {'$sum': 1}
+            }}
         ]
         
-        for lang in languages:
-            session.add(lang)
-        
-        session.commit()
+        result = list(self.collection.aggregate(pipeline))
+        return result[0] if result else {
+            'total_earned': 0,
+            'total_spent': 0,
+            'transaction_count': 0
+        }
+
+class AchievementModel:
+    """成就模型"""
     
-    session.close()
+    def __init__(self):
+        self.collection = db_config.get_collection('achievements')
+        self.user_achievements = db_config.get_collection('user_achievements')
+    
+    def create_achievement(self, achievement_data):
+        """创建成就"""
+        achievement_data['created_at'] = datetime.utcnow()
+        result = self.collection.insert_one(achievement_data)
+        return str(result.inserted_id)
+    
+    def get_all_achievements(self):
+        """获取所有成就"""
+        return list(self.collection.find())
+    
+    def get_user_achievements(self, user_id):
+        """获取用户成就"""
+        return list(self.user_achievements.find({'user_id': user_id}))
+    
+    def award_achievement(self, user_id, achievement_id):
+        """授予用户成就"""
+        # 检查是否已经获得
+        existing = self.user_achievements.find_one({
+            'user_id': user_id,
+            'achievement_id': achievement_id
+        })
+        
+        if existing:
+            return False
+        
+        # 添加成就记录
+        self.user_achievements.insert_one({
+            'user_id': user_id,
+            'achievement_id': achievement_id,
+            'earned_at': datetime.utcnow()
+        })
+        
+        return True
+
+class CulturalContentModel:
+    """文化内容模型"""
+    
+    def __init__(self):
+        self.collection = db_config.get_collection('cultural_content')
+    
+    def create_content(self, content_data):
+        """创建文化内容"""
+        content_data.update({
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'views': 0,
+            'likes': 0,
+            'shares': 0
+        })
+        
+        result = self.collection.insert_one(content_data)
+        return str(result.inserted_id)
+    
+    def get_content_feed(self, limit=10, skip=0):
+        """获取内容信息流"""
+        return list(self.collection.find().sort('created_at', -1).limit(limit).skip(skip))
+    
+    def get_content_by_id(self, content_id):
+        """根据ID获取内容"""
+        return self.collection.find_one({'_id': content_id})
+    
+    def update_content_stats(self, content_id, action):
+        """更新内容统计"""
+        if action in ['view', 'like', 'share']:
+            return self.collection.update_one(
+                {'_id': content_id},
+                {'$inc': {f'{action}s': 1}}
+            )
+        return False
+
+class ChatModel:
+    """聊天模型"""
+    
+    def __init__(self):
+        self.collection = db_config.get_collection('chat_messages')
+        self.rooms = db_config.get_collection('chat_rooms')
+    
+    def create_room(self, room_data):
+        """创建聊天室"""
+        room_data.update({
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'message_count': 0
+        })
+        
+        result = self.rooms.insert_one(room_data)
+        return str(result.inserted_id)
+    
+    def send_message(self, message_data):
+        """发送消息"""
+        message_data.update({
+            'created_at': datetime.utcnow(),
+            'is_read': False
+        })
+        
+        result = self.collection.insert_one(message_data)
+        
+        # 更新房间统计
+        self.rooms.update_one(
+            {'_id': message_data['room_id']},
+            {
+                '$inc': {'message_count': 1},
+                '$set': {'updated_at': datetime.utcnow()}
+            }
+        )
+        
+        return str(result.inserted_id)
+    
+    def get_room_messages(self, room_id, limit=50, skip=0):
+        """获取房间消息"""
+        return list(self.collection.find(
+            {'room_id': room_id}
+        ).sort('created_at', -1).limit(limit).skip(skip))
+
+def init_database():
+    """初始化数据库"""
+    try:
+        # 测试连接
+        if not db_config.connect():
+            raise Exception("Failed to connect to database")
+        
+        # 创建索引
+        user_model = UserModel()
+        user_model.collection.create_index('email', unique=True)
+        user_model.collection.create_index('username')
+        
+        points_model = PointsTransactionModel()
+        points_model.collection.create_index('user_id')
+        points_model.collection.create_index('created_at')
+        
+        # 初始化默认成就
+        achievement_model = AchievementModel()
+        existing_achievements = achievement_model.get_all_achievements()
+        
+        if not existing_achievements:
+            default_achievements = [
+                {
+                    'name': 'Cultural Explorer',
+                    'description': 'Share your first cultural content',
+                    'icon': '🌍',
+                    'points_reward': 100,
+                    'category': 'cultural',
+                    'condition_type': 'content_share',
+                    'condition_value': 1
+                },
+                {
+                    'name': 'Language Master',
+                    'description': 'Complete 10 language practice sessions',
+                    'icon': '🗣️',
+                    'points_reward': 200,
+                    'category': 'language',
+                    'condition_type': 'practice_sessions',
+                    'condition_value': 10
+                },
+                {
+                    'name': 'Community Builder',
+                    'description': 'Help 5 community members',
+                    'icon': '👥',
+                    'points_reward': 150,
+                    'category': 'social',
+                    'condition_type': 'community_help',
+                    'condition_value': 5
+                },
+                {
+                    'name': 'Tradition Keeper',
+                    'description': 'Document 3 cultural traditions',
+                    'icon': '🏛️',
+                    'points_reward': 300,
+                    'category': 'cultural',
+                    'condition_type': 'tradition_documentation',
+                    'condition_value': 3
+                }
+            ]
+            
+            for achievement in default_achievements:
+                achievement_model.create_achievement(achievement)
+        
+        logger.info("Database initialization completed successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Database initialization failed: {str(e)}")
+        return False
+
+def get_database():
+    """获取数据库实例"""
+    return db_config.db
+
+def close_database():
+    """关闭数据库连接"""
+    db_config.close()
+
+# 模型实例
+user_model = UserModel()
+points_transaction_model = PointsTransactionModel()
+achievement_model = AchievementModel()
+cultural_content_model = CulturalContentModel()
+chat_model = ChatModel()
 
 if __name__ == '__main__':
     init_database()
-    print("数据库初始化完成")
+    print("数据库配置和初始化完成")
 

@@ -1,6 +1,6 @@
 """
-CultureBridge Backend Main Application - Enhanced Version
-增强版主应用文件，集成所有商业化功能
+CultureBridge Backend Main Application - Enhanced with Points System
+增强版主应用文件，集成积分系统和MongoDB
 """
 
 import os
@@ -9,24 +9,18 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from datetime import timedelta
 
-# 导入现有服务
-from services.auth import auth_bp
-from services.translation import translation_bp
-from services.blockchain import blockchain_bp
-
-# 导入新的商业化服务
-from services.subscription import subscription_bp, subscription_service
-from services.ai_tutor import ai_tutor_bp, ai_tutor_service
-from services.points_reward import points_bp, points_service
+# 导入数据库配置
+from src.database import init_database, close_database
 
 # 导入路由
-from routes.user import user_bp
-from routes.chat import chat_bp
-from routes.learning import learning_bp
-from routes.community import community_bp
-from routes.content import content_bp
-from routes.realtime import realtime_bp
-from routes.voice_call import voice_call_bp
+from src.routes.auth import auth_bp
+from src.routes.blockchain import blockchain_bp
+from src.routes.points import points_bp
+from src.routes.chat import chat_bp
+from src.routes.learning import learning_bp
+from src.routes.community import community_bp
+from src.routes.content import content_bp
+from src.routes.realtime import realtime_bp
 
 def create_app():
     """创建Flask应用"""
@@ -38,8 +32,11 @@ def create_app():
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
     app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
     
-    # 数据库配置
-    app.config['MONGODB_URI'] = os.getenv('MONGODB_URI', 'mongodb+srv://Culturebridge:Yibin199058@culturebridge.qrfsxrk.mongodb.net/?retryWrites=true&w=majority&appName=Culturebridge')
+    # MongoDB配置
+    app.config['MONGODB_URI'] = os.getenv(
+        'MONGODB_URI', 
+        'mongodb+srv://Culturebridge:Yibin199058@culturebridge.qrfsxrk.mongodb.net/?retryWrites=true&w=majority&appName=Culturebridge'
+    )
     
     # Redis配置
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
@@ -54,22 +51,15 @@ def create_app():
     # 初始化JWT
     jwt = JWTManager(app)
     
-    # 注册蓝图 - 现有功能
+    # 注册蓝图
     app.register_blueprint(auth_bp)
-    app.register_blueprint(translation_bp)
-    app.register_blueprint(blockchain_bp)
-    app.register_blueprint(user_bp)
-    app.register_blueprint(chat_bp)
-    app.register_blueprint(learning_bp)
-    app.register_blueprint(community_bp)
-    app.register_blueprint(content_bp)
-    app.register_blueprint(realtime_bp)
-    app.register_blueprint(voice_call_bp)
-    
-    # 注册蓝图 - 新的商业化功能
-    app.register_blueprint(subscription_bp)
-    app.register_blueprint(ai_tutor_bp)
-    app.register_blueprint(points_bp)
+    app.register_blueprint(blockchain_bp, url_prefix='/api/blockchain')
+    app.register_blueprint(points_bp)  # 积分系统路由
+    app.register_blueprint(chat_bp, url_prefix='/api/chat')
+    app.register_blueprint(learning_bp, url_prefix='/api/learning')
+    app.register_blueprint(community_bp, url_prefix='/api/community')
+    app.register_blueprint(content_bp, url_prefix='/api/content')
+    app.register_blueprint(realtime_bp, url_prefix='/api/realtime')
     
     # 健康检查端点
     @app.route('/health', methods=['GET'])
@@ -77,15 +67,15 @@ def create_app():
         return jsonify({
             "status": "healthy",
             "message": "CultureBridge Backend is running",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "features": [
                 "authentication",
-                "translation",
-                "blockchain",
-                "subscription_management",
-                "ai_personal_tutor",
-                "points_reward_system",
-                "premium_features"
+                "points_system",
+                "cultural_content",
+                "real_time_translation",
+                "community_features",
+                "achievement_system",
+                "mongodb_integration"
             ]
         })
     
@@ -94,59 +84,76 @@ def create_app():
     def api_info():
         return jsonify({
             "name": "CultureBridge API",
-            "version": "2.0.0",
-            "description": "Enhanced cross-cultural communication platform with premium features",
+            "version": "3.0.0",
+            "description": "Cross-cultural communication platform with points system",
             "endpoints": {
                 "authentication": "/api/auth",
-                "translation": "/api/translation",
-                "blockchain": "/api/blockchain",
-                "subscription": "/api/subscription",
-                "ai_tutor": "/api/ai-tutor",
                 "points": "/api/points",
-                "user": "/api/user",
+                "blockchain": "/api/blockchain",
                 "chat": "/api/chat",
                 "learning": "/api/learning",
                 "community": "/api/community",
-                "content": "/api/content"
+                "content": "/api/content",
+                "realtime": "/api/realtime"
             },
-            "premium_features": {
-                "ai_personal_tutor": "AI-powered personalized language tutoring",
-                "premium_circles": "Exclusive high-quality cultural exchange circles",
-                "advanced_analytics": "Detailed learning progress and cultural competence assessment",
-                "priority_support": "24/7 priority customer support",
-                "unlimited_translation": "No limits on translation usage",
-                "offline_content": "Download content for offline learning"
+            "features": {
+                "points_system": "Earn and spend points for cultural activities",
+                "achievement_system": "Unlock achievements for cultural milestones",
+                "cultural_content": "Share and discover cultural content",
+                "real_time_translation": "Live translation for conversations",
+                "community_interaction": "Connect with people from different cultures",
+                "learning_progress": "Track your cultural learning journey"
             }
         })
     
-    # 中间件：检查订阅状态
+    # 积分系统概览端点
+    @app.route('/api/points/overview', methods=['GET'])
+    def points_overview():
+        return jsonify({
+            "success": True,
+            "data": {
+                "system_info": {
+                    "currency_name": "积分",
+                    "currency_symbol": "积分",
+                    "default_starting_points": 230
+                },
+                "earning_opportunities": {
+                    "daily_login": 10,
+                    "cultural_post": 50,
+                    "language_practice": 20,
+                    "community_interaction": 15,
+                    "content_share": 25,
+                    "achievement_unlock": 100
+                },
+                "spending_options": [
+                    "Premium content access",
+                    "Language tutoring sessions",
+                    "Cultural event tickets",
+                    "Exclusive community features",
+                    "Custom avatar items"
+                ],
+                "achievement_categories": [
+                    "Cultural Explorer",
+                    "Language Master", 
+                    "Community Builder",
+                    "Tradition Keeper"
+                ]
+            }
+        })
+    
+    # 中间件：请求日志
     @app.before_request
-    def check_subscription():
-        """检查需要订阅的功能"""
-        # 需要检查订阅的端点
-        premium_endpoints = [
-            '/api/ai-tutor/session/start',
-            '/api/ai-tutor/session/',
-            '/api/subscription/analytics'
-        ]
-        
-        # 如果是预检请求，直接通过
-        if request.method == 'OPTIONS':
-            return
-        
-        # 检查是否是需要订阅的端点
-        for endpoint in premium_endpoints:
-            if request.path.startswith(endpoint):
-                # 这里应该检查用户的订阅状态
-                # 为了演示，我们暂时跳过实际的订阅检查
-                pass
+    def log_request():
+        """记录请求日志"""
+        if request.method != 'OPTIONS':
+            app.logger.info(f"{request.method} {request.path} - {request.remote_addr}")
     
     # 错误处理
     @app.errorhandler(404)
     def not_found(error):
         return jsonify({
             "success": False,
-            "error": "Endpoint not found",
+            "error": "endpoint_not_found",
             "message": "The requested endpoint does not exist"
         }), 404
     
@@ -154,7 +161,7 @@ def create_app():
     def internal_error(error):
         return jsonify({
             "success": False,
-            "error": "Internal server error",
+            "error": "internal_server_error",
             "message": "An unexpected error occurred"
         }), 500
     
@@ -162,7 +169,7 @@ def create_app():
     def bad_request(error):
         return jsonify({
             "success": False,
-            "error": "Bad request",
+            "error": "bad_request",
             "message": "Invalid request data"
         }), 400
     
@@ -171,7 +178,7 @@ def create_app():
     def expired_token_callback(jwt_header, jwt_payload):
         return jsonify({
             "success": False,
-            "error": "Token expired",
+            "error": "token_expired",
             "message": "The JWT token has expired"
         }), 401
     
@@ -179,7 +186,7 @@ def create_app():
     def invalid_token_callback(error):
         return jsonify({
             "success": False,
-            "error": "Invalid token",
+            "error": "invalid_token",
             "message": "The JWT token is invalid"
         }), 401
     
@@ -187,9 +194,16 @@ def create_app():
     def missing_token_callback(error):
         return jsonify({
             "success": False,
-            "error": "Authorization required",
+            "error": "authorization_required",
             "message": "JWT token is required"
         }), 401
+    
+    # 应用关闭时清理
+    @app.teardown_appcontext
+    def close_db(error):
+        """关闭数据库连接"""
+        if error:
+            app.logger.error(f"Application error: {error}")
     
     return app
 
@@ -197,36 +211,48 @@ def init_services():
     """初始化服务"""
     print("Initializing CultureBridge services...")
     
-    # 初始化订阅服务
-    print("✓ Subscription service initialized")
+    # 初始化数据库
+    if init_database():
+        print("✓ MongoDB database initialized")
+    else:
+        print("✗ Failed to initialize database")
+        return False
     
-    # 初始化AI导师服务
-    print("✓ AI Tutor service initialized")
-    
-    # 初始化积分奖励服务
-    print("✓ Points reward service initialized")
+    print("✓ Points system initialized")
+    print("✓ Achievement system initialized")
+    print("✓ Cultural content system initialized")
+    print("✓ Chat system initialized")
     
     print("All services initialized successfully!")
+    return True
 
 if __name__ == '__main__':
     # 创建应用
     app = create_app()
     
     # 初始化服务
-    init_services()
+    if not init_services():
+        print("Failed to initialize services. Exiting...")
+        exit(1)
     
     # 运行应用
     print("Starting CultureBridge Backend Server...")
-    print("Premium features enabled:")
-    print("  - AI Personal Tutor")
-    print("  - Subscription Management")
-    print("  - Points Reward System")
-    print("  - Premium Cultural Circles")
-    print("  - Advanced Analytics")
+    print("Features enabled:")
+    print("  - Points System (积分系统)")
+    print("  - Achievement System")
+    print("  - Cultural Content Sharing")
+    print("  - Real-time Translation")
+    print("  - Community Features")
+    print("  - MongoDB Integration")
     
-    app.run(
-        host='0.0.0.0',
-        port=int(os.getenv('PORT', 5000)),
-        debug=os.getenv('FLASK_ENV') == 'development'
-    )
+    try:
+        app.run(
+            host='0.0.0.0',
+            port=int(os.getenv('PORT', 5000)),
+            debug=os.getenv('FLASK_ENV') == 'development'
+        )
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        close_database()
+        print("Server stopped.")
 
