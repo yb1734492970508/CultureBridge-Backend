@@ -17,7 +17,7 @@ redis==5.0.1
 # 认证和安全
 PyJWT==2.8.0
 bcrypt==4.1.2
-cryptography==41.0.8
+cryptography==45.0.4
 passlib==1.7.4
 
 # HTTP和API
