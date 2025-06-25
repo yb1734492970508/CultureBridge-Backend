@@ -48,6 +48,9 @@ const voice = require('./routes/voice');
 const tokens = require('./routes/tokens');
 const culturalExchange = require('./routes/culturalExchange');
 const languageLearning = require('./routes/languageLearning');
+const phoneAudio = require('./routes/phoneAudio');
+const externalAudio = require('./routes/externalAudio');
+const { router: voiceCall } = require('./routes/voiceCall');
 
 // 条件导入区块链相关模块
 let blockchain = null;
@@ -133,7 +136,10 @@ app.get('/', (req, res) => {
       communities: '/api/v1/communities',
       messages: '/api/v1/messages',
       culturalExchange: '/api/v1/cultural-exchanges',
-      languageLearning: '/api/v1/language-learning'
+      languageLearning: '/api/v1/language-learning',
+      phoneAudio: '/api/phone-audio',
+      externalAudio: '/api/external-audio',
+      voiceCall: '/api/voice-call'
     }
   });
 });
@@ -156,6 +162,9 @@ app.use('/api/v1/voice', voice);
 app.use('/api/v1/tokens', tokens);
 app.use('/api/v1/cultural-exchanges', culturalExchange);
 app.use('/api/v1/language-learning', languageLearning);
+app.use('/api/phone-audio', phoneAudio);
+app.use('/api/external-audio', externalAudio);
+app.use('/api/voice-call', voiceCall);
 
 // 条件挂载区块链路由
 if (blockchain) {
