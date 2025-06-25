@@ -404,14 +404,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 处理
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'API endpoint not found'
-  });
-});
-
 // 初始化数据
 initializeData();
 
@@ -424,4 +416,124 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 module.exports = app;
+
+
+
+// 手机播放内容实时翻译API
+app.post("/api/translate/mobile-content", async (req, res) => {
+  const { audioContent, sourceLanguage, targetLanguage } = req.body;
+
+  if (!audioContent || !sourceLanguage || !targetLanguage) {
+    return res.status(400).json({ error: "Missing required parameters: audioContent, sourceLanguage, targetLanguage" });
+  }
+
+  try {
+    // 模拟翻译服务
+    // 在实际应用中，这里会调用一个真实的翻译API，例如Google Cloud Translation API, AWS Translate, 或百度翻译API
+    const translatedText = `[Translated from ${sourceLanguage} to ${targetLanguage}: ${audioContent}]`;
+    res.json({
+      success: true,
+      translatedText: translatedText,
+      sourceLanguage: sourceLanguage,
+      targetLanguage: targetLanguage,
+    });
+  } catch (error) {
+    console.error("Error during mobile content translation:", error);
+    res.status(500).json({ error: "Failed to translate mobile content" });
+  }
+});
+
+
+
+
+// 外部音频实时翻译API
+app.post("/api/translate/external-audio", async (req, res) => {
+  const { audioData, sourceLanguage, targetLanguage } = req.body;
+
+  if (!audioData || !sourceLanguage || !targetLanguage) {
+    return res.status(400).json({ error: "Missing required parameters: audioData, sourceLanguage, targetLanguage" });
+  }
+
+  try {
+    // 模拟翻译服务
+    // 在实际应用中，这里会调用一个真实的语音识别和翻译API
+    const translatedText = `[Translated external audio from ${sourceLanguage} to ${targetLanguage}: ${audioData}]`;
+    res.json({
+      success: true,
+      translatedText: translatedText,
+      sourceLanguage: sourceLanguage,
+      targetLanguage: targetLanguage,
+    });
+  } catch (error) {
+    console.error("Error during external audio translation:", error);
+    res.status(500).json({ error: "Failed to translate external audio" });
+  }
+});
+
+
+
+
+// 语音通话匹配API
+app.post("/api/call/match", async (req, res) => {
+  const { userId, language, country } = req.body;
+
+  if (!userId || !language || !country) {
+    return res.status(400).json({ error: "Missing required parameters: userId, language, country" });
+  }
+
+  try {
+    // 模拟匹配逻辑
+    // 在实际应用中，这里会有一个复杂的匹配算法，根据语言、国家、兴趣等进行匹配
+    const matchedUser = { id: "matched_user_id", name: "Matched User", language: "en", country: "US" }; // 模拟匹配到的用户
+
+    if (matchedUser) {
+      res.json({
+        success: true,
+        matchedUser: matchedUser,
+        callId: `call_${Date.now()}` // 模拟通话ID
+      });
+    } else {
+      res.status(404).json({ error: "No matching user found" });
+    }
+  } catch (error) {
+    console.error("Error during call matching:", error);
+    res.status(500).json({ error: "Failed to match for call" });
+  }
+});
+
+// Socket.IO 语音通话事件
+io.on("connection", (socket) => {
+  console.log("User connected for call:", socket.id);
+
+  socket.on("join_call", (callId) => {
+    socket.join(callId);
+    console.log(`User ${socket.id} joined call ${callId}`);
+    io.to(callId).emit("user_joined_call", socket.id);
+  });
+
+  socket.on("send_audio", (data) => {
+    const { callId, audioChunk } = data;
+    // 广播音频数据给通话中的其他用户
+    socket.to(callId).emit("receive_audio", audioChunk);
+  });
+
+  socket.on("leave_call", (callId) => {
+    socket.leave(callId);
+    console.log(`User ${socket.id} left call ${callId}`);
+    io.to(callId).emit("user_left_call", socket.id);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected from call:", socket.id);
+  });
+});
+
+// 404 处理
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'API endpoint not found'
+  });
+});
+
 
