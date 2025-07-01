@@ -1,4 +1,4 @@
-#!/home/ubuntu/culturebridge-backend-v3/venv/bin/python3.11
+#!/home/ubuntu/culturebridge-backend/venv/bin/python3.11
 # -*- coding: utf-8 -*-
 import re
 import sys
