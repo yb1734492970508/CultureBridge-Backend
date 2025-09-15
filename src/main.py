@@ -1,14 +1,13 @@
+
 import os
 import sys
-# DON'T CHANGE THIS !!!
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import timedelta
 import pymongo
 from pymongo import MongoClient
+from bson.objectid import ObjectId
 import bcrypt
 import json
 from datetime import datetime
@@ -18,18 +17,15 @@ app.config['SECRET_KEY'] = 'culturebridge-secret-key-2024'
 app.config['JWT_SECRET_KEY'] = 'jwt-secret-string'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
-# 启用CORS
 CORS(app, origins="*", allow_headers=["Content-Type", "Authorization"])
 
-# 初始化JWT
 jwt = JWTManager(app)
 
-# MongoDB配置
 MONGODB_URI = 'mongodb+srv://Culturebridge:Yibin199058@culturebridge.qrfsxrk.mongodb.net/?retryWrites=true&w=majority&appName=Culturebridge'
 client = MongoClient(MONGODB_URI)
 db = client.culturebridge
 
-# 健康检查端点
+# Health Check
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -42,11 +38,12 @@ def health_check():
             "cultural_content",
             "real_time_translation",
             "community_features",
-            "mongodb_integration"
+            "mongodb_integration",
+            "course_management"
         ]
     })
 
-# API信息端点
+# API Info
 @app.route('/api/info', methods=['GET'])
 def api_info():
     return jsonify({
@@ -59,11 +56,12 @@ def api_info():
             "chat": "/api/chat",
             "learning": "/api/learning",
             "culture": "/api/culture",
-            "translation": "/api/translation"
+            "translation": "/api/translation",
+            "courses": "/api/courses"
         }
     })
 
-# 用户注册
+# User Registration
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     try:
@@ -75,20 +73,17 @@ def register():
         if not username or not email or not password:
             return jsonify({"error": "Missing required fields"}), 400
         
-        # 检查用户是否已存在
         existing_user = db.users.find_one({"$or": [{"username": username}, {"email": email}]})
         if existing_user:
             return jsonify({"error": "User already exists"}), 409
         
-        # 加密密码
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
-        # 创建用户
         user_data = {
             "username": username,
             "email": email,
             "password": hashed_password,
-            "points": 230,  # 初始积分
+            "points": 230,
             "level": 1,
             "created_at": datetime.utcnow(),
             "profile": {
@@ -101,7 +96,6 @@ def register():
         
         result = db.users.insert_one(user_data)
         
-        # 创建访问令牌
         access_token = create_access_token(identity=str(result.inserted_id))
         
         return jsonify({
@@ -120,7 +114,7 @@ def register():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 用户登录
+# User Login
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     try:
@@ -131,16 +125,13 @@ def login():
         if not username or not password:
             return jsonify({"error": "Missing username or password"}), 400
         
-        # 查找用户
         user = db.users.find_one({"$or": [{"username": username}, {"email": username}]})
         if not user:
             return jsonify({"error": "Invalid credentials"}), 401
         
-        # 验证密码
         if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
             return jsonify({"error": "Invalid credentials"}), 401
         
-        # 创建访问令牌
         access_token = create_access_token(identity=str(user['_id']))
         
         return jsonify({
@@ -159,13 +150,13 @@ def login():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 获取用户信息
+# Get User Profile
 @app.route('/api/users/profile', methods=['GET'])
 @jwt_required()
 def get_profile():
     try:
         user_id = get_jwt_identity()
-        user = db.users.find_one({"_id": pymongo.ObjectId(user_id)})
+        user = db.users.find_one({"_id": ObjectId(user_id)})
         
         if not user:
             return jsonify({"error": "User not found"}), 404
@@ -185,11 +176,85 @@ def get_profile():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 文化内容API
+# Course Management APIs
+@app.route('/api/courses', methods=['POST'])
+@jwt_required()
+def create_course():
+    try:
+        data = request.get_json()
+        required_fields = ["title", "country", "points_reward", "content"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": "Missing required course fields"}), 400
+        
+        course_data = {
+            "title": data['title'],
+            "description": data.get('description', ''),
+            "country": data['country'],
+            "difficulty": data.get('difficulty', 'beginner'),
+            "points_reward": data['points_reward'],
+            "image_url": data.get('image_url', ''),
+            "content": data['content'],
+            "duration_minutes": data.get('duration_minutes'),
+            "tags": data.get('tags', [])
+        }
+        
+        result = db.courses.insert_one(course_data)
+        course_data['_id'] = str(result.inserted_id)
+        return jsonify({"success": True, "course": course_data}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/courses', methods=['GET'])
+def get_all_courses():
+    try:
+        courses = []
+        for course in db.courses.find():
+            course['_id'] = str(course['_id'])
+            courses.append(course)
+        return jsonify({"success": True, "courses": courses}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/courses/<course_id>', methods=['GET'])
+def get_course_by_id(course_id):
+    try:
+        course = db.courses.find_one({"_id": ObjectId(course_id)})
+        if course:
+            course['_id'] = str(course['_id'])
+            return jsonify({"success": True, "course": course}), 200
+        return jsonify({"error": "Course not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/courses/<course_id>', methods=['PUT'])
+@jwt_required()
+def update_course(course_id):
+    try:
+        data = request.get_json()
+        result = db.courses.update_one({"_id": ObjectId(course_id)}, {"$set": data})
+        if result.matched_count:
+            updated_course = db.courses.find_one({"_id": ObjectId(course_id)})
+            updated_course['_id'] = str(updated_course['_id'])
+            return jsonify({"success": True, "message": "Course updated", "course": updated_course}), 200
+        return jsonify({"error": "Course not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/courses/<course_id>', methods=['DELETE'])
+@jwt_required()
+def delete_course(course_id):
+    try:
+        result = db.courses.delete_one({"_id": ObjectId(course_id)})
+        if result.deleted_count:
+            return jsonify({"success": True, "message": "Course deleted"}), 200
+        return jsonify({"error": "Course not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Cultural Content API (Existing - kept for reference, consider integrating with new Course model)
 @app.route('/api/culture/content', methods=['GET'])
 def get_culture_content():
     try:
-        # 模拟文化内容数据
         content = [
             {
                 "id": "1",
@@ -228,7 +293,7 @@ def get_culture_content():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 翻译API
+# Translation API
 @app.route('/api/translation/translate', methods=['POST'])
 def translate_text():
     try:
@@ -237,7 +302,6 @@ def translate_text():
         source_lang = data.get('source_lang', 'auto')
         target_lang = data.get('target_lang', 'en')
         
-        # 模拟翻译结果
         translations = {
             "你好": "Hello",
             "谢谢": "Thank you",
@@ -260,14 +324,13 @@ def translate_text():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 学习进度API
+# Learning Progress API
 @app.route('/api/learning/progress', methods=['GET'])
 @jwt_required()
 def get_learning_progress():
     try:
         user_id = get_jwt_identity()
         
-        # 模拟学习进度数据
         progress = {
             "total_lessons": 50,
             "completed_lessons": 12,
@@ -288,12 +351,11 @@ def get_learning_progress():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 聊天室API
+# Chat Rooms API
 @app.route('/api/chat/rooms', methods=['GET'])
 @jwt_required()
 def get_chat_rooms():
     try:
-        # 模拟聊天室数据
         rooms = [
             {
                 "id": "1",
@@ -347,4 +409,6 @@ def serve(path):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+
 
